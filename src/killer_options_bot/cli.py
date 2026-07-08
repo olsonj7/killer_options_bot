@@ -415,8 +415,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     serve(
         config_path=args.config,
         source=args.source,
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         auth=auth,
     )
     return 0
