@@ -24,6 +24,8 @@ COPY config.yaml ./config.yaml
 # Railway provides PORT. Bind to all interfaces; auth is required for non-local
 # hosts (KOB_AUTH_USER / KOB_AUTH_PASS). DATABASE_URL selects Postgres. The data
 # source defaults to mock; set KOB_SOURCE=tradier (+ TRADIER_API_TOKEN) to use
-# real market data.
+# real market data. --run also starts the automated scan/manage loop in the
+# same process (market-hours aware); disable it with KOB_RUN=0 if you only want
+# the dashboard.
 EXPOSE 8787
-CMD ["killer-options-bot", "serve", "--host", "0.0.0.0"]
+CMD ["killer-options-bot", "serve", "--host", "0.0.0.0", "--run"]

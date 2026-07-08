@@ -510,12 +510,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Optional embedded run loop. Enabled by the --run flag; the KOB_RUN env
+    # var overrides it when set (so a deploy whose start command includes --run
+    # can still be turned off with KOB_RUN=0 without a redeploy). Lets one
+    # process (e.g. a single Railway service) both trade and serve the UI.
+    run_env = os.getenv("KOB_RUN")
+    if run_env is not None:
+        run_loop = run_env.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        run_loop = bool(args.run)
+
     serve(
         config_path=args.config,
         source=source,
         host=host,
         port=port,
         auth=auth,
+        run_loop=run_loop,
+        run_tick=int(args.run_tick),
+        run_paper=not args.no_paper,
+        run_ignore_market_hours=bool(args.ignore_market_hours),
     )
     return 0
 
@@ -546,11 +560,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     Outside market hours it sleeps until the next open (unless
     --ignore-market-hours). Ctrl-C exits cleanly.
     """
-    import time as _time
-    from datetime import datetime
-
-    from killer_options_bot import market
-
     config = load_config(args.config)
     try:
         source = _resolve_run_source(args, config)
@@ -558,103 +567,139 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        run_loop(
+            config_path=args.config,
+            source=source,
+            tick=int(args.tick),
+            paper=not args.no_paper,
+            ignore_market_hours=bool(args.ignore_market_hours),
+            once=bool(args.once),
+        )
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+    return 0
+
+
+def run_loop(
+    config_path: str,
+    source: str,
+    tick: int = 60,
+    paper: bool = True,
+    ignore_market_hours: bool = False,
+    once: bool = False,
+    stop_event=None,
+    log=print,
+) -> int:
+    """The scan/manage loop shared by the `run` command and `serve --run`.
+
+    ``stop_event`` (a threading.Event) lets a host thread request a clean stop;
+    ``log`` lets the caller redirect output. Returns the number of active
+    (market-open) cycles completed.
+    """
+    import time as _time
+    from datetime import datetime
+
+    from killer_options_bot import market
+
+    config = load_config(config_path)
     storage = get_storage(config)
-    tick = max(1, int(args.tick))
-    paper = not args.no_paper
+    tick = max(1, int(tick))
     strategies = list(config.active_strategies)
 
-    print(
+    log(
         f"Run loop starting: source={source}, tick={tick}s, "
         f"paper={'on' if paper else 'off'}, "
         f"strategies={[s.name for s in strategies]}"
     )
-    print(
+    log(
         "Entry scan cadence per strategy: "
         + ", ".join(f"{s.name}={s.scan_interval_minutes}m" for s in strategies)
     )
-    if args.ignore_market_hours:
-        print("WARNING: --ignore-market-hours set; trading clock is bypassed.")
-    print("Press Ctrl-C to stop.\n")
+    if ignore_market_hours:
+        log("WARNING: ignore_market_hours set; trading clock is bypassed.")
+
+    def _stopped() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
+    def _sleep(seconds: float) -> None:
+        # Interruptible sleep so a stop_event ends the wait promptly.
+        if stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            _time.sleep(seconds)
 
     # Next time (monotonic seconds) each strategy is due to scan; scan on the
     # first open tick, then space subsequent scans by the strategy interval.
     next_scan: dict[str, float] = {s.name: 0.0 for s in strategies}
     cycles = 0
 
-    try:
-        while True:
-            now_mono = _time.monotonic()
-            open_now = args.ignore_market_hours or market.is_market_open()
+    while not _stopped():
+        now_mono = _time.monotonic()
+        open_now = ignore_market_hours or market.is_market_open()
 
-            if not open_now:
-                wait = (
-                    tick
-                    if args.ignore_market_hours
-                    else min(
-                        max(market.seconds_until_open(), tick), 3600.0
-                    )
-                )
-                nxt = market.next_open().strftime("%Y-%m-%d %H:%M %Z")
-                print(
-                    f"[{datetime.now().strftime('%H:%M:%S')}] market closed; "
-                    f"next open {nxt} (sleeping {int(wait)}s)"
-                )
-                _time.sleep(wait)
-                if args.once:
-                    break
-                continue
-
-            as_of = date.today()
-            data = _build_data_source(source, config, as_of=None)
-            engine = PaperEngine(config, data, storage, as_of=as_of)
-            scanner = Scanner(config, data, storage, as_of=as_of)
-            stamp = datetime.now().strftime("%H:%M:%S")
-
-            # 1) Always manage exits first (capital protection).
-            results = engine.manage_all()
-            closed = sum(1 for r in results if r.closed)
-            if results:
-                print(
-                    f"[{stamp}] managed {len(results)} position(s), "
-                    f"closed {closed}"
-                )
-
-            # 2) Scan each strategy that is due for new entries.
-            opened = 0
-            scanned = []
-            for strategy in strategies:
-                if now_mono < next_scan[strategy.name]:
-                    continue
-                scanned.append(strategy.name)
-                next_scan[strategy.name] = (
-                    now_mono + strategy.scan_interval_minutes * 60
-                )
-                for candidate in scanner.scan_strategy(strategy):
-                    if not candidate.decision.allowed:
-                        continue
-                    if not paper:
-                        continue
-                    position = engine.open_from_candidate(candidate)
-                    if position is not None:
-                        opened += 1
-                        print(
-                            f"[{stamp}] opened #{position.id} "
-                            f"[{strategy.name}] {position.quantity}x "
-                            f"{position.option_symbol} @ "
-                            f"${position.entry_price:.2f}"
-                        )
-            if scanned and opened == 0:
-                print(f"[{stamp}] scanned {scanned}: no new entries")
-
-            cycles += 1
-            if args.once:
+        if not open_now:
+            wait = (
+                tick
+                if ignore_market_hours
+                else min(max(market.seconds_until_open(), tick), 3600.0)
+            )
+            nxt = market.next_open().strftime("%Y-%m-%d %H:%M %Z")
+            log(
+                f"[{datetime.now().strftime('%H:%M:%S')}] market closed; "
+                f"next open {nxt} (sleeping {int(wait)}s)"
+            )
+            if once:
                 break
-            _time.sleep(tick)
-    except KeyboardInterrupt:
-        print("\nStopped by user.")
+            _sleep(wait)
+            continue
 
-    print(f"Run loop finished after {cycles} active cycle(s).")
-    return 0
+        as_of = date.today()
+        data = _build_data_source(source, config, as_of=None)
+        engine = PaperEngine(config, data, storage, as_of=as_of)
+        scanner = Scanner(config, data, storage, as_of=as_of)
+        stamp = datetime.now().strftime("%H:%M:%S")
+
+        # 1) Always manage exits first (capital protection).
+        results = engine.manage_all()
+        closed = sum(1 for r in results if r.closed)
+        if results:
+            log(f"[{stamp}] managed {len(results)} position(s), closed {closed}")
+
+        # 2) Scan each strategy that is due for new entries.
+        opened = 0
+        scanned = []
+        for strategy in strategies:
+            if now_mono < next_scan[strategy.name]:
+                continue
+            scanned.append(strategy.name)
+            next_scan[strategy.name] = (
+                now_mono + strategy.scan_interval_minutes * 60
+            )
+            for candidate in scanner.scan_strategy(strategy):
+                if not candidate.decision.allowed:
+                    continue
+                if not paper:
+                    continue
+                position = engine.open_from_candidate(candidate)
+                if position is not None:
+                    opened += 1
+                    log(
+                        f"[{stamp}] opened #{position.id} "
+                        f"[{strategy.name}] {position.quantity}x "
+                        f"{position.option_symbol} @ "
+                        f"${position.entry_price:.2f}"
+                    )
+        if scanned and opened == 0:
+            log(f"[{stamp}] scanned {scanned}: no new entries")
+
+        cycles += 1
+        if once:
+            break
+        _sleep(tick)
+
+    log(f"Run loop finished after {cycles} active cycle(s).")
+    return cycles
 
 
 
@@ -803,6 +848,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument(
         "--auth-pass",
         help="Basic Auth password (or set KOB_AUTH_PASS env var)",
+    )
+    p_serve.add_argument(
+        "--run",
+        action="store_true",
+        help="Also run the automated scan/manage loop in a background thread "
+        "(or set KOB_RUN=1)",
+    )
+    p_serve.add_argument(
+        "--run-tick",
+        type=int,
+        default=60,
+        help="Loop cycle seconds when --run is set (default 60)",
+    )
+    p_serve.add_argument(
+        "--no-paper",
+        action="store_true",
+        help="With --run, scan/manage only; do not open paper positions",
+    )
+    p_serve.add_argument(
+        "--ignore-market-hours",
+        action="store_true",
+        help="With --run, bypass the market-open check (testing only)",
     )
     p_serve.set_defaults(func=cmd_serve)
 

@@ -831,6 +831,10 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8787,
     auth: tuple[str, str] | None = None,
+    run_loop: bool = False,
+    run_tick: int = 60,
+    run_paper: bool = True,
+    run_ignore_market_hours: bool = False,
 ) -> None:
     dashboard = Dashboard(config_path, source)
     handler = _make_handler(dashboard, auth=auth)
@@ -843,9 +847,44 @@ def serve(
             "  WARNING: bound to a non-local host without auth. "
             "Anyone on the network can control this dashboard."
         )
+
+    # Optionally run the automated scan/manage loop in a background thread so a
+    # single process (e.g. one Railway service) both trades and serves the UI.
+    stop_event = None
+    loop_thread = None
+    if run_loop:
+        import threading
+
+        from killer_options_bot.cli import run_loop as _run_loop
+
+        stop_event = threading.Event()
+
+        def _loop() -> None:
+            try:
+                _run_loop(
+                    config_path=config_path,
+                    source=source,
+                    tick=run_tick,
+                    paper=run_paper,
+                    ignore_market_hours=run_ignore_market_hours,
+                    stop_event=stop_event,
+                    log=lambda m: print(f"[run] {m}"),
+                )
+            except Exception as exc:  # keep the web server alive on loop error
+                print(f"[run] loop crashed: {exc}")
+
+        loop_thread = threading.Thread(target=_loop, name="run-loop", daemon=True)
+        loop_thread.start()
+        print(f"  automated run loop: ON (tick={run_tick}s)")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping dashboard.")
     finally:
+        if stop_event is not None:
+            stop_event.set()
+        if loop_thread is not None:
+            loop_thread.join(timeout=5)
         server.server_close()
+

@@ -109,3 +109,38 @@ def test_run_rejects_tradier_without_token(tmp_path, capsys):
     err = capsys.readouterr().err
     assert rc == 1
     assert "requires a token" in err
+
+
+def test_run_loop_stops_on_event(tmp_path):
+    """The extracted run_loop honors a stop_event (used by serve --run)."""
+    import threading
+
+    from killer_options_bot.cli import run_loop
+
+    config_path = _write_run_config(tmp_path)
+    stop = threading.Event()
+    logs: list[str] = []
+
+    def target():
+        run_loop(
+            config_path=str(config_path),
+            source="mock",
+            tick=1,
+            paper=True,
+            ignore_market_hours=True,
+            stop_event=stop,
+            log=logs.append,
+        )
+
+    t = threading.Thread(target=target)
+    t.start()
+    # Let at least one cycle run, then request stop.
+    import time
+
+    time.sleep(0.5)
+    stop.set()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert any("Run loop starting" in m for m in logs)
+    assert any("Run loop finished" in m for m in logs)
+
