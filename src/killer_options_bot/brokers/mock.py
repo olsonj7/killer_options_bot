@@ -3,14 +3,20 @@
 Generates plausible quotes and option chains without any network access so the
 scanner and paper engine can be exercised end-to-end.
 
+Option prices and deltas come from a real Black-Scholes model (py_vollib), so
+theoretical values, put/call parity, and delta behaviour are internally
+consistent rather than hand-approximated. Each strike carries a synthesized
+implied volatility (a mild smile plus equity skew) and a constant risk-free
+rate (``RISK_FREE_RATE``).
+
 Design notes for repeatability across dates:
 - Strikes are anchored to a *stable* per-symbol base price so that OCC option
   symbols do not change as ``as_of`` advances. This lets a position opened on
   one date be re-priced on a later date (the symbol still matches).
 - The underlying "last" price *does* drift with ``as_of`` so option values move
   over time and exit rules can trigger during a paper simulation.
-- Expirations are fixed calendar dates (the 15th of each month), filtered to
-  those still in the future relative to ``as_of``.
+- Expirations are fixed calendar dates (weekly Fridays + monthly 15ths),
+  filtered to those still in the future relative to ``as_of``.
 """
 
 from __future__ import annotations
@@ -19,10 +25,16 @@ import hashlib
 import math
 from datetime import date, timedelta
 
+from py_vollib.black_scholes import black_scholes
+from py_vollib.black_scholes.greeks.analytical import delta as bs_delta
+
 from killer_options_bot.models import OptionContract, Quote, Side
 
 # Anchor month used to generate a stable ladder of monthly expirations.
 _ANCHOR = date(2026, 1, 15)
+
+# Assumed constant risk-free rate for Black-Scholes pricing of mock chains.
+RISK_FREE_RATE = 0.04
 
 
 def _seed(symbol: str) -> int:
@@ -116,30 +128,36 @@ class MockMarketData:
                 # Strikes anchored to the STABLE base price -> stable symbols.
                 strike = round(base * (1 + offset), 1)
 
-                # ``moneyness`` here is signed ITM-ness for THIS side: positive
-                # when the option is in the money, negative when out.
-                if side is Side.CALL:
-                    moneyness = (last - strike) / last
+                flag = "c" if side is Side.CALL else "p"
+
+                # Per-strike implied volatility with a mild smile + equity skew,
+                # so the chain isn't perfectly flat: the base level varies by
+                # symbol, IV rises for strikes far from the money (smile), and
+                # downside strikes carry a little extra premium (skew).
+                base_iv = 0.20 + (seed % 20) / 100.0  # 0.20 - 0.39
+                log_m = math.log(strike / last) if last > 0 else 0.0
+                smile = 0.6 * (log_m * log_m)
+                skew = 0.05 * max(0.0, -log_m)
+                iv = round(min(2.0, max(0.05, base_iv + smile + skew)), 4)
+
+                # Black-Scholes price + delta (py_vollib). ``t`` is year
+                # fraction to expiry; at/after expiry only intrinsic remains.
+                t = max(dte, 0) / 365.0
+                if t <= 0:
+                    if side is Side.CALL:
+                        mid = max(0.0, last - strike)
+                    else:
+                        mid = max(0.0, strike - last)
+                    if mid <= 0:
+                        delta = 0.0
+                    else:
+                        delta = 1.0 if side is Side.CALL else -1.0
                 else:
-                    moneyness = (strike - last) / last
-                intrinsic = max(0.0, moneyness) * last
+                    mid = black_scholes(flag, last, strike, t, RISK_FREE_RATE, iv)
+                    delta = bs_delta(flag, last, strike, t, RISK_FREE_RATE, iv)
 
-                iv = 0.20 + ((seed + k) % 30) / 100.0  # 0.20 - 0.49
-
-                # Expected move (standard deviation of return) to expiration.
-                # Extrinsic value follows an ATM-straddle approximation: it peaks
-                # at the money, decays for OTM/ITM strikes, and shrinks with time
-                # (~sqrt(dte)) for realistic theta. Because it depends on
-                # moneyness, a correct directional move in the underlying
-                # actually increases the option's value (real delta behaviour).
-                sigma_move = max(iv * math.sqrt(max(dte, 0) / 365.0), 1e-4)
-                z = moneyness / sigma_move
-                extrinsic = last * sigma_move * 0.3989 * math.exp(-0.5 * z * z)
-                mid = round(max(0.01, intrinsic + extrinsic), 2)
-
-                # Delta: smooth 0..1 through 0.5 ATM, consistent with pricing.
-                abs_delta = 0.5 + 0.5 * math.tanh(1.1 * z)
-                delta = round(abs_delta if side is Side.CALL else -abs_delta, 3)
+                mid = round(max(0.01, mid), 2)
+                delta = round(delta, 3)
 
                 half_spread = round(mid * 0.03, 2)
                 bid = round(max(0.01, mid - half_spread), 2)
@@ -147,7 +165,6 @@ class MockMarketData:
 
                 volume = 50 + ((seed + k * 37) % 900)
                 open_interest = 200 + ((seed + k * 53) % 4000)
-                iv = round(iv, 4)
 
                 occ = (
                     f"{symbol}{expiration:%y%m%d}"

@@ -51,6 +51,20 @@ class ExitConfig:
 
 
 @dataclass(frozen=True)
+class CostConfig:
+    """Transaction-cost assumptions for paper fills.
+
+    Fills at the mid overstate edge: in reality you buy near the ask and sell
+    near the bid, plus commission. These knobs feed a ``CostModel`` so paper
+    entries/exits (and the run loop) reflect that friction.
+    """
+
+    commission_per_contract: float = 0.65
+    slippage_frac: float = 1.0
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class StrategyConfig:
     """A named strategy "method": its own contract filters + exit rules.
 
@@ -120,6 +134,7 @@ class Config:
     database_url: str | None
     tradier: TradierConfig
     strategies: tuple["StrategyConfig", ...] = ()
+    costs: "CostConfig" = field(default_factory=CostConfig)
     withdraw: "WithdrawConfig" = field(
         default_factory=lambda: WithdrawConfig(
             enabled=False,
@@ -147,6 +162,21 @@ class Config:
                 filters=self.filters,
                 exits=self.exits,
             ),
+        )
+
+    def cost_model(self):
+        """Build the ``CostModel`` for paper fills from ``costs`` config.
+
+        Returns ``CostModel.free()`` (mid fills, no commission) when costs are
+        disabled, so tests and the legacy behaviour can opt out.
+        """
+        from killer_options_bot.models import CostModel
+
+        if not self.costs.enabled:
+            return CostModel.free()
+        return CostModel(
+            commission_per_contract=self.costs.commission_per_contract,
+            slippage_frac=self.costs.slippage_frac,
         )
 
 
@@ -367,6 +397,19 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         base_url=os.getenv("TRADIER_BASE_URL", "https://sandbox.tradier.com/v1"),
     )
 
+    costs_raw = raw.get("costs", {}) or {}
+    costs_cfg = CostConfig(
+        commission_per_contract=float(
+            costs_raw.get("commission_per_contract", 0.65)
+        ),
+        slippage_frac=float(costs_raw.get("slippage_frac", 1.0)),
+        enabled=bool(costs_raw.get("enabled", True)),
+    )
+    if costs_cfg.commission_per_contract < 0:
+        raise ValueError("costs.commission_per_contract must be >= 0")
+    if not 0 <= costs_cfg.slippage_frac <= 1:
+        raise ValueError("costs.slippage_frac must be between 0 and 1")
+
     wd = raw.get("withdraw", {}) or {}
     starting_capital = float(wd.get("starting_capital", 0.0)) or account_value
     milestones_raw = wd.get("milestones", []) or []
@@ -415,5 +458,6 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         database_url=database_url,
         tradier=tradier,
         strategies=tuple(active_strategies),
+        costs=costs_cfg,
         withdraw=withdraw_cfg,
     )

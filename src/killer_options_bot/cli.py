@@ -81,7 +81,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     opened = 0
     if getattr(args, "paper", False) and allowed:
-        engine = PaperEngine(config, data, storage, as_of=as_of)
+        engine = PaperEngine(
+            config, data, storage, as_of=as_of, cost_model=config.cost_model()
+        )
         for candidate in allowed:
             position = engine.open_from_candidate(candidate)
             if position is not None:
@@ -124,7 +126,9 @@ def cmd_manage(args: argparse.Namespace) -> int:
     storage = get_storage(config)
     as_of = _parse_as_of(args)
     data = _build_data_source(args.source, config, as_of)
-    engine = PaperEngine(config, data, storage, as_of=as_of)
+    engine = PaperEngine(
+        config, data, storage, as_of=as_of, cost_model=config.cost_model()
+    )
 
     positions = storage.open_positions()
     if not positions:
@@ -160,7 +164,9 @@ def cmd_positions(args: argparse.Namespace) -> int:
     storage = get_storage(config)
     as_of = _parse_as_of(args)
     data = _build_data_source(args.source, config, as_of)
-    engine = PaperEngine(config, data, storage, as_of=as_of)
+    engine = PaperEngine(
+        config, data, storage, as_of=as_of, cost_model=config.cost_model()
+    )
 
     positions = storage.open_positions()
     if not positions:
@@ -189,7 +195,9 @@ def cmd_pnl(args: argparse.Namespace) -> int:
     storage = get_storage(config)
     as_of = _parse_as_of(args)
     data = _build_data_source(args.source, config, as_of)
-    engine = PaperEngine(config, data, storage, as_of=as_of)
+    engine = PaperEngine(
+        config, data, storage, as_of=as_of, cost_model=config.cost_model()
+    )
 
     closed = storage.closed_positions()
     open_positions = storage.open_positions()
@@ -656,7 +664,9 @@ def run_loop(
 
         as_of = date.today()
         data = _build_data_source(source, config, as_of=None)
-        engine = PaperEngine(config, data, storage, as_of=as_of)
+        engine = PaperEngine(
+            config, data, storage, as_of=as_of, cost_model=config.cost_model()
+        )
         scanner = Scanner(config, data, storage, as_of=as_of)
         stamp = datetime.now().strftime("%H:%M:%S")
 

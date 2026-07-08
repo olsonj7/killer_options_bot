@@ -174,6 +174,18 @@ exits:
   # Also exit if DTE falls to or below this (0 = only force-exit at expiry).
   min_dte_exit: 0
 
+costs:
+  # Transaction-cost assumptions for paper fills. Filling at the mid overstates
+  # edge; in reality you buy near the ask and sell near the bid, plus a per-
+  # contract commission. These feed the paper engine so scan/manage and the run
+  # loop record realistic entry/exit prices and P/L.
+  enabled: true
+  # Dollars charged per contract on BOTH entry and exit.
+  commission_per_contract: 0.65
+  # Fraction of the half-spread you cross: 1.0 = pay full ask / receive full bid
+  # (conservative, realistic for illiquid weeklies); 0.0 = fill at mid.
+  slippage_frac: 1.0
+
 storage:
   db_path: data/killer_options_bot.db
   # Optional hosted Postgres (e.g. Supabase). The DATABASE_URL env var, if set,

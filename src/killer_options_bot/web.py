@@ -84,7 +84,7 @@ class Dashboard:
         config = load_config(self.config_path)
         storage = get_storage(config)
         data = _build_data_source(self.source, config)
-        engine = PaperEngine(config, data, storage)
+        engine = PaperEngine(config, data, storage, cost_model=config.cost_model())
         return config, storage, data, engine
 
     # --- Actions -----------------------------------------------------------

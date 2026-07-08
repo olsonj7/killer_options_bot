@@ -98,6 +98,13 @@ def test_default_backtester_applies_costs(tmp_path):
     default = Backtester(
         config, date(2026, 2, 1), date(2026, 5, 1), step_days=3
     ).run()
+    costed = Backtester(
+        config,
+        date(2026, 2, 1),
+        date(2026, 5, 1),
+        step_days=3,
+        cost_model=CostModel(),
+    ).run()
     free = Backtester(
         config,
         date(2026, 2, 1),
@@ -105,7 +112,12 @@ def test_default_backtester_applies_costs(tmp_path):
         step_days=3,
         cost_model=CostModel.free(),
     ).run()
-    assert default.total_pl <= free.total_pl
+    # The default matches an explicit CostModel() (realistic fills)...
+    assert default.total_pl == costed.total_pl
+    # ...and differs from a free (mid-fill, no-commission) run. Note total P/L is
+    # not monotonic in costs: a higher entry price shifts the percentage-based
+    # exit thresholds, so an earlier stop-out can change outcomes either way.
+    assert default.total_pl != free.total_pl
 
 
 def test_data_factory_is_pluggable(tmp_path):
