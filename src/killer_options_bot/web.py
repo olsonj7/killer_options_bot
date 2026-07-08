@@ -337,6 +337,99 @@ _WD_LABELS = {
     "drawdown_defense": "De-risk (drawdown)",
 }
 
+
+def _r_multiple(position: PaperPosition) -> float | None:
+    """Result expressed in R (multiple of risk).
+
+    Risk on a long option is the debit paid (the max loss), so R is simply the
+    realized P/L divided by the entry cost. Mirrors the "Percent Result" column
+    of the trade-tracker template, where a full stop-out is -1R.
+    """
+    pl = position.realized_pl()
+    if pl is None or position.entry_cost <= 0:
+        return None
+    return pl / position.entry_cost
+
+
+def _trade_stats(closed: list[PaperPosition]) -> list[dict]:
+    """Compute tracker-style stats grouped by strategy, plus a Total row.
+
+    Each row carries: type, wins, losses, total, win_rate, avg_winner,
+    avg_loser, risk_reward, total_r -- the same data points as the template's
+    "Total Percentage" sheet.
+    """
+
+    def summarize(name: str, rows: list[PaperPosition]) -> dict:
+        rs = [r for r in (_r_multiple(p) for p in rows) if r is not None]
+        wins = [r for r in rs if r > 0]
+        losses = [r for r in rs if r <= 0]
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = sum(losses) / len(losses) if losses else 0.0
+        rr = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
+        return {
+            "type": name,
+            "wins": len(wins),
+            "losses": len(losses),
+            "total": len(rs),
+            "win_rate": (len(wins) / len(rs)) if rs else 0.0,
+            "avg_winner": avg_win,
+            "avg_loser": avg_loss,
+            "risk_reward": rr,
+            "total_r": sum(rs),
+        }
+
+    by_strategy: dict[str, list[PaperPosition]] = {}
+    for p in closed:
+        by_strategy.setdefault(p.strategy or "default", []).append(p)
+
+    rows = [summarize(name, by_strategy[name]) for name in sorted(by_strategy)]
+    if len(rows) > 1:
+        rows.append(summarize("Total", closed))
+    return rows
+
+
+def _render_stats_section(closed: list[PaperPosition]) -> str:
+    """Render the R-based trade-stats table (tracker template layout)."""
+    stats = _trade_stats(closed)
+    if not any(row["total"] for row in stats):
+        body = (
+            "<tr><td colspan='9' class='muted'>No closed trades yet &mdash; "
+            "stats appear once trades are managed to exit.</td></tr>"
+        )
+    else:
+        cells = []
+        for row in stats:
+            is_total = row["type"] == "Total"
+            name = html.escape(row["type"])
+            if is_total:
+                name = f"<strong>{name}</strong>"
+            rcls = "pos" if row["total_r"] >= 0 else "neg"
+            cells.append(
+                f"<tr><td>{name}</td>"
+                f"<td>{row['wins']}</td>"
+                f"<td>{row['losses']}</td>"
+                f"<td>{row['total']}</td>"
+                f"<td>{row['win_rate']:.0%}</td>"
+                f"<td class='pos'>{row['avg_winner']:+.2f}R</td>"
+                f"<td class='neg'>{row['avg_loser']:+.2f}R</td>"
+                f"<td>{row['risk_reward']:.2f}</td>"
+                f"<td class='{rcls}'>{row['total_r']:+.2f}R</td></tr>"
+            )
+        body = "".join(cells)
+
+    return f"""
+  <h2 style="font-size:15px;">Trade stats
+    <span class="warn" style="font-weight:400;">(R = multiple of risk; a full stop-out is -1R)</span>
+  </h2>
+  <table>
+    <tr><th>Type</th><th>Wins</th><th>Losses</th><th>Total</th>
+        <th>Win rate</th><th>Avg winner</th><th>Avg loser</th>
+        <th>Risk:Reward</th><th>Total (R)</th></tr>
+    {body}
+  </table>
+"""
+
+
 def _render_page(
     config: Config,
     storage: "BaseStorage",
@@ -419,6 +512,7 @@ def _render_page(
     equity_svg = _equity_curve_svg(closed, unrealized=unrealized)
 
     withdraw_html = _render_withdraw_section(config, storage)
+    stats_html = _render_stats_section(closed)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -509,6 +603,8 @@ def _render_page(
 
   <h2 style="font-size:15px;">Equity curve (realized solid, open marks dashed)</h2>
   <div class="chart">{equity_svg}</div>
+
+  {stats_html}
 
   {withdraw_html}
 
