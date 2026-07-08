@@ -181,6 +181,11 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         )
 
     watchlist = list(raw.get("watchlist", []))
+    # A tier may override the watchlist entirely (e.g. keep a small account on
+    # SPY/QQQ only, and open up more tickers as the account grows). When a tier
+    # has no 'watchlist' key, the base watchlist is used unchanged.
+    if tier and tier.get("watchlist") is not None:
+        watchlist = list(tier.get("watchlist"))
     if not watchlist:
         raise ValueError("watchlist must contain at least one symbol")
 

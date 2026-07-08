@@ -7,14 +7,18 @@ account:
 
 # Account-size tiers: the strategy "bends" automatically with account value.
 # The tier with the greatest min_value that is <= account.value is applied, and
-# its sections (risk / contract_filters / exits) are overlaid on top of the base
-# sections below. Only list the keys you want to change per tier; anything not
-# listed falls through to the base value. Remove this block to disable tiering.
+# its sections (risk / contract_filters / exits / watchlist) are overlaid on top
+# of the base sections below. Only list the keys you want to change per tier;
+# anything not listed falls through to the base value. A tier's 'watchlist', if
+# present, REPLACES the base watchlist entirely. Remove this block to disable.
 #
 # NOTE: these numbers are reasonable starting defaults, NOT validated on real
 # market data yet. Tune them after a Tradier backtest shows real behaviour.
 account_tiers:
   - min_value: 0        # $0 - $5k: survival. Cheap OTM weeklies, tight stops.
+    # Small account stays on the two most liquid ETFs only. Tight spreads and
+    # deep options chains matter far more than variety when capital is tiny.
+    watchlist: [SPY, QQQ]
     risk:
       max_trade_risk_pct: 0.30
       max_open_positions: 2
@@ -22,6 +26,8 @@ account_tiers:
       min_delta: 0.20
       max_delta: 0.35
   - min_value: 5000     # $5k - $25k: build. A bit more premium, some spread.
+    # Room to add a couple more highly-liquid names as the account grows.
+    watchlist: [SPY, QQQ, IWM, AAPL]
     risk:
       max_trade_risk_pct: 0.15
       max_open_positions: 3
@@ -29,6 +35,7 @@ account_tiers:
       min_delta: 0.30
       max_delta: 0.45
   - min_value: 25000    # $25k+: scale. PDT no longer binds; wider posture.
+    watchlist: [SPY, QQQ, IWM, AAPL, NVDA, MSFT, AMD]
     risk:
       max_trade_risk_pct: 0.10
       max_open_positions: 5

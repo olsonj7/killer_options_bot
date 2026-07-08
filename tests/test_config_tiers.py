@@ -114,3 +114,30 @@ def test_unlisted_keys_fall_through_to_base(tmp_path):
     assert cfg.risk.max_trades_per_week == 10
     assert cfg.filters.min_dte == 2
     assert cfg.filters.max_dte == 7
+
+
+_WATCHLIST_TIERS = [
+    {"min_value": 0, "watchlist": ["SPY", "QQQ"]},
+    {"min_value": 5000, "watchlist": ["SPY", "QQQ", "IWM", "AAPL"]},
+    {"min_value": 25000},  # no watchlist key -> base watchlist used
+]
+
+
+def test_small_account_watchlist_locked_to_spy_qqq(tmp_path):
+    path = _write_config(tmp_path, 1000.0, tiers=_WATCHLIST_TIERS)
+    cfg = load_config(path)
+    assert cfg.watchlist == ["SPY", "QQQ"]
+
+
+def test_mid_account_opens_up_watchlist(tmp_path):
+    path = _write_config(tmp_path, 10000.0, tiers=_WATCHLIST_TIERS)
+    cfg = load_config(path)
+    assert cfg.watchlist == ["SPY", "QQQ", "IWM", "AAPL"]
+
+
+def test_tier_without_watchlist_key_keeps_base(tmp_path):
+    # $25k tier defines no watchlist -> base watchlist (from _write_config) wins.
+    path = _write_config(tmp_path, 30000.0, tiers=_WATCHLIST_TIERS)
+    cfg = load_config(path)
+    assert cfg.watchlist == ["SPY"]
+
