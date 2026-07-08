@@ -30,8 +30,8 @@ account_tiers:
   - min_value: 5000     # $5k - $25k: build. A bit more premium, some spread.
     # Room to add a couple more highly-liquid names as the account grows.
     watchlist: [SPY, QQQ, IWM, AAPL]
-    # Weekly trade plus a small allocation of intraday 0DTE scalps.
-    strategies: [default, zerodte]
+    # Weekly trade, intraday 0DTE scalps, and multi-day swings.
+    strategies: [default, zerodte, swing]
     risk:
       max_trade_risk_pct: 0.15
       max_open_positions: 3
@@ -40,7 +40,8 @@ account_tiers:
       max_delta: 0.45
   - min_value: 25000    # $25k+: scale. PDT no longer binds; wider posture.
     watchlist: [SPY, QQQ, IWM, AAPL, NVDA, MSFT, AMD]
-    strategies: [default, zerodte]
+    # Full playbook: weekly, 0DTE, swing, and long-dated LEAPS.
+    strategies: [default, zerodte, swing, leaps]
     risk:
       max_trade_risk_pct: 0.10
       max_open_positions: 5
@@ -74,6 +75,36 @@ strategies:
       stop_loss_pct: 0.30
       max_holding_days: 0
       min_dte_exit: 0
+  swing:
+    # Multi-day directional trades. Longer expiries give the move room to
+    # develop, so a wider stop and a multi-day hold, exiting before theta bites.
+    signal: momentum
+    contract_filters:
+      min_dte: 7
+      max_dte: 21
+      min_delta: 0.40
+      max_delta: 0.60
+      max_spread_pct: 0.12
+    exits:
+      profit_target_pct: 0.60
+      stop_loss_pct: 0.40
+      max_holding_days: 10
+      min_dte_exit: 2
+  leaps:
+    # Long-dated, high-conviction directional bets. Deep-ish delta for share
+    # substitution, patient hold measured in weeks, exit well before expiry.
+    signal: momentum
+    contract_filters:
+      min_dte: 180
+      max_dte: 540
+      min_delta: 0.60
+      max_delta: 0.80
+      max_spread_pct: 0.10
+    exits:
+      profit_target_pct: 1.00
+      stop_loss_pct: 0.50
+      max_holding_days: 60
+      min_dte_exit: 30
 
 
 mode:
