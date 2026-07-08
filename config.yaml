@@ -1,0 +1,78 @@
+# Killer Options Bot configuration.
+# All risk numbers are conservative small-account defaults. Tune carefully.
+
+account:
+  # Your account size in dollars. Used to size and reject trades.
+  value: 1000.0
+
+mode:
+  # "scan" logs candidates only. "paper" also opens simulated positions.
+  # "live" enables real orders but ONLY behind every guardrail in the "live"
+  # section below (kill switch, loss lockouts, --i-understand-live, etc.).
+  trading_mode: scan
+
+watchlist:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - TSLA
+
+
+risk:
+  # Fraction of account allowed at risk per trade (0.05 = 5%).
+  max_trade_risk_pct: 0.05
+  # Max simultaneous open positions (enforced in paper/live phases).
+  max_open_positions: 1
+  # Max new trades logged per calendar week.
+  max_trades_per_week: 2
+
+contract_filters:
+  min_dte: 30
+  max_dte: 60
+  # Absolute delta band for the long option.
+  min_delta: 0.30
+  max_delta: 0.45
+  # Reject if (ask - bid) / mid exceeds this fraction.
+  max_spread_pct: 0.12
+  min_volume: 100
+  min_open_interest: 500
+
+signal:
+  # Simple momentum gate. A call needs price above SMA and RSI in band.
+  sma_period: 20
+  rsi_period: 14
+  rsi_min: 45
+  rsi_max: 70
+
+exits:
+  # Paper-trade exit rules. Percentages are of the entry debit.
+  # Take profit when the option mid is up this fraction (0.35 = +35%).
+  profit_target_pct: 0.35
+  # Cut the loss when the option mid is down this fraction (0.45 = -45%).
+  stop_loss_pct: 0.45
+  # Force an exit once the position has been held this many days.
+  max_holding_days: 21
+  # Also exit if DTE falls to or below this (avoid the final gamma/theta zone).
+  min_dte_exit: 21
+
+storage:
+  db_path: data/killer_options_bot.db
+  # Optional hosted Postgres (e.g. Supabase). The DATABASE_URL env var, if set,
+  # takes precedence over this value. Leave unset to use the SQLite db_path.
+  # database_url: postgresql://postgres:PASSWORD@db.PROJECT.supabase.co:5432/postgres
+
+live:
+  # Live order placement. DISABLED by default. Every field below is a guardrail.
+  # See the README "Live trading" section before touching any of this.
+  enabled: false
+  # Create this file at any time to instantly block all new live orders.
+  kill_switch_file: KILL_SWITCH
+  # Dollars of realized loss (from live trades) before the daily/weekly lockout.
+  # 0 means "auto": 2% of account (daily) and 5% (weekly).
+  max_daily_loss: 0
+  max_weekly_loss: 0
+  # Hard cap on contracts per single order.
+  max_contracts_per_order: 1

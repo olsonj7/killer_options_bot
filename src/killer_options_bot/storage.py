@@ -1,0 +1,416 @@
+"""Persistence for scanned candidates and (paper/live) trades.
+
+Two backends implement the same interface:
+
+- ``SQLiteStorage`` (default): a local file DB, great for dev and paper trading.
+- ``PostgresStorage``: for hosted deployments (e.g. Supabase). Selected when a
+  ``DATABASE_URL`` is configured. Requires the optional ``psycopg`` dependency.
+
+All high-level query logic lives in ``BaseStorage`` and is written with ``?``
+placeholders; each backend translates placeholders and dialect-specific SQL.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Iterator
+
+from killer_options_bot.models import (
+    Candidate,
+    PaperPosition,
+    PositionStatus,
+    Side,
+)
+
+
+@dataclass(frozen=True)
+class Dialect:
+    placeholder: str
+    autoincrement: str
+    real: str
+
+
+SQLITE = Dialect(
+    placeholder="?",
+    autoincrement="INTEGER PRIMARY KEY AUTOINCREMENT",
+    real="REAL",
+)
+POSTGRES = Dialect(
+    placeholder="%s",
+    autoincrement="BIGSERIAL PRIMARY KEY",
+    real="DOUBLE PRECISION",
+)
+
+
+def _schema(d: Dialect) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS candidates (
+    id {d.autoincrement},
+    created_at TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    option_symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    strike {d.real} NOT NULL,
+    expiration TEXT NOT NULL,
+    dte INTEGER NOT NULL,
+    mid {d.real} NOT NULL,
+    spread_pct {d.real} NOT NULL,
+    delta {d.real} NOT NULL,
+    implied_volatility {d.real} NOT NULL,
+    volume INTEGER NOT NULL,
+    open_interest INTEGER NOT NULL,
+    cost {d.real} NOT NULL,
+    max_loss {d.real} NOT NULL,
+    allowed INTEGER NOT NULL,
+    reasons TEXT NOT NULL,
+    signal_note TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS positions (
+    id {d.autoincrement},
+    option_symbol TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    side TEXT NOT NULL,
+    strike {d.real} NOT NULL,
+    expiration TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    entry_price {d.real} NOT NULL,
+    entry_date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'paper',
+    broker_order_id TEXT,
+    exit_price {d.real},
+    exit_date TEXT,
+    exit_reason TEXT
+);
+"""
+
+
+class BaseStorage:
+    """Backend-agnostic query logic. Subclasses implement connection I/O."""
+
+    dialect: Dialect
+
+    # --- Low-level ops -----------------------------------------------------
+
+    @contextmanager
+    def _connect(self):  # pragma: no cover - overridden
+        raise NotImplementedError
+        yield  # noqa
+
+    def _translate(self, sql: str) -> str:
+        if self.dialect.placeholder == "?":
+            return sql
+        return sql.replace("?", self.dialect.placeholder)
+
+    def _insert(self, sql: str, params: tuple) -> int:  # pragma: no cover
+        raise NotImplementedError
+
+    def _query_all(self, sql: str, params: tuple = ()) -> list[dict]:
+        with self._connect() as conn:
+            cur = conn.execute(self._translate(sql), params)
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+    def _query_one(self, sql: str, params: tuple = ()) -> dict | None:
+        rows = self._query_all(sql, params)
+        return rows[0] if rows else None
+
+    def _execute(self, sql: str, params: tuple = ()) -> None:
+        with self._connect() as conn:
+            conn.execute(self._translate(sql), params)
+
+    def _init_schema(self) -> None:
+        with self._connect() as conn:
+            for statement in _schema(self.dialect).split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    conn.execute(stmt)
+
+    # --- Candidates --------------------------------------------------------
+
+    def record_candidate(self, candidate: Candidate) -> int:
+        c = candidate.contract
+        return self._insert(
+            """
+            INSERT INTO candidates (
+                created_at, underlying, option_symbol, side, strike,
+                expiration, dte, mid, spread_pct, delta, implied_volatility,
+                volume, open_interest, cost, max_loss, allowed, reasons,
+                signal_note
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                candidate.created_at.isoformat(),
+                c.underlying,
+                c.symbol,
+                candidate.side.value,
+                c.strike,
+                c.expiration.isoformat(),
+                c.dte(),
+                c.mid,
+                c.spread_pct,
+                c.delta,
+                c.implied_volatility,
+                c.volume,
+                c.open_interest,
+                c.cost,
+                candidate.max_loss,
+                1 if candidate.decision.allowed else 0,
+                "; ".join(candidate.decision.reasons),
+                candidate.signal_note,
+            ),
+        )
+
+    def count_allowed_since(self, since: datetime) -> int:
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM candidates "
+            "WHERE allowed = 1 AND created_at >= ?",
+            (since.isoformat(),),
+        )
+        return int(row["n"]) if row else 0
+
+    def trades_this_week(self) -> int:
+        since = datetime.utcnow() - timedelta(days=7)
+        return self.count_allowed_since(since)
+
+    def positions_opened_since(self, since: date) -> int:
+        """Count positions whose entry_date is on/after ``since``.
+
+        Basing the weekly-cadence guardrail on entry dates (not wall-clock
+        candidate timestamps) keeps it correct during backtests too.
+        """
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM positions WHERE entry_date >= ?",
+            (since.isoformat(),),
+        )
+        return int(row["n"]) if row else 0
+
+    def trades_in_trailing_week(self, as_of: date) -> int:
+        return self.positions_opened_since(as_of - timedelta(days=7))
+
+    def recent_candidates(self, limit: int = 20) -> list[dict]:
+        return self._query_all(
+            "SELECT * FROM candidates ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+
+    # --- Positions ---------------------------------------------------------
+
+    @staticmethod
+    def _row_to_position(row: dict) -> PaperPosition:
+        return PaperPosition(
+            id=int(row["id"]),
+            option_symbol=row["option_symbol"],
+            underlying=row["underlying"],
+            side=Side(row["side"]),
+            strike=float(row["strike"]),
+            expiration=date.fromisoformat(row["expiration"]),
+            quantity=int(row["quantity"]),
+            entry_price=float(row["entry_price"]),
+            entry_date=date.fromisoformat(row["entry_date"]),
+            status=PositionStatus(row["status"]),
+            exit_price=(
+                float(row["exit_price"])
+                if row.get("exit_price") is not None
+                else None
+            ),
+            exit_date=(
+                date.fromisoformat(row["exit_date"])
+                if row.get("exit_date")
+                else None
+            ),
+            exit_reason=row.get("exit_reason"),
+        )
+
+    def open_position(
+        self,
+        position: PaperPosition,
+        mode: str = "paper",
+        broker_order_id: str | None = None,
+    ) -> int:
+        position.id = self._insert(
+            """
+            INSERT INTO positions (
+                option_symbol, underlying, side, strike, expiration,
+                quantity, entry_price, entry_date, status, mode,
+                broker_order_id, exit_price, exit_date, exit_reason
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                position.option_symbol,
+                position.underlying,
+                position.side.value,
+                position.strike,
+                position.expiration.isoformat(),
+                position.quantity,
+                position.entry_price,
+                position.entry_date.isoformat(),
+                position.status.value,
+                mode,
+                broker_order_id,
+                position.exit_price,
+                position.exit_date.isoformat() if position.exit_date else None,
+                position.exit_reason,
+            ),
+        )
+        return position.id
+
+    def close_position(
+        self,
+        position_id: int,
+        exit_price: float,
+        exit_date: date,
+        exit_reason: str,
+    ) -> None:
+        self._execute(
+            """
+            UPDATE positions
+            SET status = ?, exit_price = ?, exit_date = ?, exit_reason = ?
+            WHERE id = ?
+            """,
+            (
+                PositionStatus.CLOSED.value,
+                exit_price,
+                exit_date.isoformat(),
+                exit_reason,
+                position_id,
+            ),
+        )
+
+    def open_positions(self) -> list[PaperPosition]:
+        rows = self._query_all(
+            "SELECT * FROM positions WHERE status = ? ORDER BY id",
+            (PositionStatus.OPEN.value,),
+        )
+        return [self._row_to_position(r) for r in rows]
+
+    def count_open_positions(self) -> int:
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM positions WHERE status = ?",
+            (PositionStatus.OPEN.value,),
+        )
+        return int(row["n"]) if row else 0
+
+    def has_open_position(self, option_symbol: str) -> bool:
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM positions "
+            "WHERE status = ? AND option_symbol = ?",
+            (PositionStatus.OPEN.value, option_symbol),
+        )
+        return bool(row and int(row["n"]) > 0)
+
+    def all_positions(self, limit: int = 100) -> list[PaperPosition]:
+        rows = self._query_all(
+            "SELECT * FROM positions ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_position(r) for r in rows]
+
+    def closed_positions(self) -> list[PaperPosition]:
+        rows = self._query_all(
+            "SELECT * FROM positions WHERE status = ? ORDER BY id",
+            (PositionStatus.CLOSED.value,),
+        )
+        return [self._row_to_position(r) for r in rows]
+
+    def realized_pl_since(self, since: date, mode: str = "live") -> float:
+        """Sum realized P/L (dollars) for closed positions of ``mode`` whose
+        exit_date is on/after ``since``. Used by live loss-lockout guards."""
+        rows = self._query_all(
+            "SELECT entry_price, exit_price, quantity FROM positions "
+            "WHERE status = ? AND mode = ? AND exit_date >= ? "
+            "AND exit_price IS NOT NULL",
+            (PositionStatus.CLOSED.value, mode, since.isoformat()),
+        )
+        total = 0.0
+        for r in rows:
+            total += (
+                (float(r["exit_price"]) - float(r["entry_price"]))
+                * 100
+                * int(r["quantity"])
+            )
+        return round(total, 2)
+
+
+class SQLiteStorage(BaseStorage):
+    """Local file-based SQLite backend."""
+
+    dialect = SQLITE
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        if str(self.db_path) != ":memory:":
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _insert(self, sql: str, params: tuple) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(self._translate(sql), params)
+            return int(cur.lastrowid)
+
+
+class PostgresStorage(BaseStorage):
+    """Postgres backend (e.g. Supabase). Requires the ``psycopg`` package."""
+
+    dialect = POSTGRES
+
+    def __init__(self, dsn: str):
+        try:
+            import psycopg  # noqa: F401
+            from psycopg.rows import dict_row
+        except ImportError as exc:  # pragma: no cover - optional dep
+            raise RuntimeError(
+                "Postgres backend requires 'psycopg'. Install with: "
+                "pip install 'psycopg[binary]'"
+            ) from exc
+        self._dsn = dsn
+        self._psycopg = psycopg
+        self._dict_row = dict_row
+        self._init_schema()
+
+    @contextmanager
+    def _connect(self):
+        conn = self._psycopg.connect(self._dsn, row_factory=self._dict_row)
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _insert(self, sql: str, params: tuple) -> int:
+        sql = self._translate(sql) + " RETURNING id"
+        with self._connect() as conn:
+            cur = conn.execute(sql, params)
+            row = cur.fetchone()
+            return int(row["id"])
+
+
+# Backwards-compatible default alias.
+Storage = SQLiteStorage
+
+
+def get_storage(config: Any) -> BaseStorage:
+    """Pick a backend based on config.
+
+    Uses Postgres when ``config.database_url`` is set (from the DATABASE_URL
+    environment variable), otherwise the local SQLite file.
+    """
+    dsn = getattr(config, "database_url", None)
+    if dsn:
+        return PostgresStorage(dsn)
+    return SQLiteStorage(config.db_path)
