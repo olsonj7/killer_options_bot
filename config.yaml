@@ -17,10 +17,11 @@ watchlist:
 
 
 risk:
-  # Fraction of account allowed at risk per trade (0.15 = 15%).
-  # Small accounts need a wider cap so a real weekly contract fits; the tight
-  # stop-loss below is what actually caps the dollar loss per trade.
-  max_trade_risk_pct: 0.15
+  # Fraction of account allowed at risk per trade. This caps the *full premium*
+  # paid. It is set relatively high because the tight stop-loss below is the
+  # real loss limiter: a 30% premium cap with a 25% stop means the actual loss
+  # per trade is only ~7-8% of the account.
+  max_trade_risk_pct: 0.30
   # Max simultaneous open positions (enforced in paper/live phases).
   max_open_positions: 3
   # Max new trades logged per calendar week.
@@ -28,11 +29,15 @@ risk:
 
 contract_filters:
   # Weekly / short-dated horizon for a small-account challenge.
-  min_dte: 0
+  # Floor of 2 DTE avoids buying options that expire before the move can play
+  # out (a near-certain loss on OTM contracts held to next-day expiry).
+  min_dte: 2
   max_dte: 7
-  # Absolute delta band for the long option. Slightly-OTM keeps tickets cheap.
-  min_delta: 0.25
-  max_delta: 0.45
+  # Absolute delta band for the long option. Slightly-OTM (~0.20-0.40) keeps
+  # weekly tickets affordable on a small account while retaining directional
+  # exposure.
+  min_delta: 0.20
+  max_delta: 0.40
   # Reject if (ask - bid) / mid exceeds this fraction.
   max_spread_pct: 0.12
   min_volume: 100

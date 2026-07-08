@@ -107,31 +107,47 @@ class MockMarketData:
 
         for expiration in self._expirations():
             dte = (expiration - self.as_of).days
-            # Wide, fine strike ladder (+/-14% in 2% steps). Anchored to the
-            # stable base price, it must be wide enough that in-band (0.25-0.45
-            # delta) strikes still exist after ``last`` has drifted over time.
-            offsets = [round(-0.14 + 0.02 * i, 2) for i in range(15)]
+            # Fine strike ladder (+/-14% in 1% steps). Anchored to the stable
+            # base price, it must be wide enough that in-band (delta) strikes
+            # still exist after ``last`` has drifted, and fine enough that a
+            # near-target-delta strike is available for short-dated options.
+            offsets = [round(-0.14 + 0.01 * i, 2) for i in range(29)]
             for k, offset in enumerate(offsets):
                 # Strikes anchored to the STABLE base price -> stable symbols.
                 strike = round(base * (1 + offset), 1)
 
+                # ``moneyness`` here is signed ITM-ness for THIS side: positive
+                # when the option is in the money, negative when out.
                 if side is Side.CALL:
                     moneyness = (last - strike) / last
-                    intrinsic = max(0.0, last - strike)
                 else:
                     moneyness = (strike - last) / last
-                    intrinsic = max(0.0, strike - last)
+                intrinsic = max(0.0, moneyness) * last
 
-                delta = max(0.05, min(0.9, 0.5 + moneyness * 4))
-                time_value = base * 0.02 * (max(dte, 0) / 45.0)
-                mid = round(max(0.05, intrinsic + time_value), 2)
+                iv = 0.20 + ((seed + k) % 30) / 100.0  # 0.20 - 0.49
+
+                # Expected move (standard deviation of return) to expiration.
+                # Extrinsic value follows an ATM-straddle approximation: it peaks
+                # at the money, decays for OTM/ITM strikes, and shrinks with time
+                # (~sqrt(dte)) for realistic theta. Because it depends on
+                # moneyness, a correct directional move in the underlying
+                # actually increases the option's value (real delta behaviour).
+                sigma_move = max(iv * math.sqrt(max(dte, 0) / 365.0), 1e-4)
+                z = moneyness / sigma_move
+                extrinsic = last * sigma_move * 0.3989 * math.exp(-0.5 * z * z)
+                mid = round(max(0.01, intrinsic + extrinsic), 2)
+
+                # Delta: smooth 0..1 through 0.5 ATM, consistent with pricing.
+                abs_delta = 0.5 + 0.5 * math.tanh(1.1 * z)
+                delta = round(abs_delta if side is Side.CALL else -abs_delta, 3)
+
                 half_spread = round(mid * 0.03, 2)
                 bid = round(max(0.01, mid - half_spread), 2)
                 ask = round(mid + half_spread, 2)
 
                 volume = 50 + ((seed + k * 37) % 900)
                 open_interest = 200 + ((seed + k * 53) % 4000)
-                iv = round(0.20 + ((seed + k) % 30) / 100.0, 4)
+                iv = round(iv, 4)
 
                 occ = (
                     f"{symbol}{expiration:%y%m%d}"
@@ -148,7 +164,7 @@ class MockMarketData:
                         bid=bid,
                         ask=ask,
                         last=mid,
-                        delta=round(delta if side is Side.CALL else -delta, 3),
+                        delta=delta,
                         implied_volatility=iv,
                         volume=volume,
                         open_interest=open_interest,

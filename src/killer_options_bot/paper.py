@@ -117,12 +117,22 @@ class PaperEngine:
             self.data, position.underlying, position.side, position.option_symbol
         )
         if contract is None:
-            # No live price. As a safety fallback, exit at expiration only.
+            # The option is no longer quoted (typically at/after expiration).
+            # Settle at intrinsic value from the underlying rather than assuming
+            # a total loss: an option held to expiry realizes max(0, intrinsic).
             if position.dte(self.as_of) <= 0:
+                last = self.data.get_quote(position.underlying).last
+                if position.side is Side.CALL:
+                    intrinsic = max(0.0, last - position.strike)
+                else:
+                    intrinsic = max(0.0, position.strike - last)
+                intrinsic = round(intrinsic, 2)
                 self.storage.close_position(
-                    position.id, 0.0, self.as_of, "expired, no market price"
+                    position.id, intrinsic, self.as_of, "expired at intrinsic"
                 )
-                return ManageResult(position, None, True, "expired (no price)")
+                return ManageResult(
+                    position, intrinsic, True, "expired at intrinsic"
+                )
             return ManageResult(position, None, False, "no price available")
 
         price = contract.mid
