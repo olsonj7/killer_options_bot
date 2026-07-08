@@ -520,6 +520,144 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_run_source(args: argparse.Namespace, config: Config) -> str:
+    """Resolve and validate the data source for the run loop (like serve)."""
+    import os
+
+    source = args.source or os.getenv("KOB_SOURCE", "mock")
+    if source not in {"mock", "tradier"}:
+        raise ValueError(
+            f"unknown source '{source}'. Use 'mock' or 'tradier' "
+            "(via --source or the KOB_SOURCE environment variable)."
+        )
+    if source == "tradier" and not config.tradier.api_token:
+        raise ValueError(
+            "source 'tradier' requires a token. Set TRADIER_API_TOKEN "
+            "(and optionally TRADIER_BASE_URL) in the environment."
+        )
+    return source
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run continuously, acting only while the US market is open.
+
+    Every tick it manages open positions (exit checks), and it scans each
+    strategy for new entries on that strategy's own ``scan_interval_minutes``.
+    Outside market hours it sleeps until the next open (unless
+    --ignore-market-hours). Ctrl-C exits cleanly.
+    """
+    import time as _time
+    from datetime import datetime
+
+    from killer_options_bot import market
+
+    config = load_config(args.config)
+    try:
+        source = _resolve_run_source(args, config)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    storage = get_storage(config)
+    tick = max(1, int(args.tick))
+    paper = not args.no_paper
+    strategies = list(config.active_strategies)
+
+    print(
+        f"Run loop starting: source={source}, tick={tick}s, "
+        f"paper={'on' if paper else 'off'}, "
+        f"strategies={[s.name for s in strategies]}"
+    )
+    print(
+        "Entry scan cadence per strategy: "
+        + ", ".join(f"{s.name}={s.scan_interval_minutes}m" for s in strategies)
+    )
+    if args.ignore_market_hours:
+        print("WARNING: --ignore-market-hours set; trading clock is bypassed.")
+    print("Press Ctrl-C to stop.\n")
+
+    # Next time (monotonic seconds) each strategy is due to scan; scan on the
+    # first open tick, then space subsequent scans by the strategy interval.
+    next_scan: dict[str, float] = {s.name: 0.0 for s in strategies}
+    cycles = 0
+
+    try:
+        while True:
+            now_mono = _time.monotonic()
+            open_now = args.ignore_market_hours or market.is_market_open()
+
+            if not open_now:
+                wait = (
+                    tick
+                    if args.ignore_market_hours
+                    else min(
+                        max(market.seconds_until_open(), tick), 3600.0
+                    )
+                )
+                nxt = market.next_open().strftime("%Y-%m-%d %H:%M %Z")
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] market closed; "
+                    f"next open {nxt} (sleeping {int(wait)}s)"
+                )
+                _time.sleep(wait)
+                if args.once:
+                    break
+                continue
+
+            as_of = date.today()
+            data = _build_data_source(source, config, as_of=None)
+            engine = PaperEngine(config, data, storage, as_of=as_of)
+            scanner = Scanner(config, data, storage, as_of=as_of)
+            stamp = datetime.now().strftime("%H:%M:%S")
+
+            # 1) Always manage exits first (capital protection).
+            results = engine.manage_all()
+            closed = sum(1 for r in results if r.closed)
+            if results:
+                print(
+                    f"[{stamp}] managed {len(results)} position(s), "
+                    f"closed {closed}"
+                )
+
+            # 2) Scan each strategy that is due for new entries.
+            opened = 0
+            scanned = []
+            for strategy in strategies:
+                if now_mono < next_scan[strategy.name]:
+                    continue
+                scanned.append(strategy.name)
+                next_scan[strategy.name] = (
+                    now_mono + strategy.scan_interval_minutes * 60
+                )
+                for candidate in scanner.scan_strategy(strategy):
+                    if not candidate.decision.allowed:
+                        continue
+                    if not paper:
+                        continue
+                    position = engine.open_from_candidate(candidate)
+                    if position is not None:
+                        opened += 1
+                        print(
+                            f"[{stamp}] opened #{position.id} "
+                            f"[{strategy.name}] {position.quantity}x "
+                            f"{position.option_symbol} @ "
+                            f"${position.entry_price:.2f}"
+                        )
+            if scanned and opened == 0:
+                print(f"[{stamp}] scanned {scanned}: no new entries")
+
+            cycles += 1
+            if args.once:
+                break
+            _time.sleep(tick)
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+
+    print(f"Run loop finished after {cycles} active cycle(s).")
+    return 0
+
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -667,6 +805,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Basic Auth password (or set KOB_AUTH_PASS env var)",
     )
     p_serve.set_defaults(func=cmd_serve)
+
+    p_run = sub.add_parser(
+        "run",
+        help="Run continuously during market hours (scan + manage on a loop)",
+    )
+    p_run.add_argument(
+        "--source",
+        choices=["mock", "tradier"],
+        default=None,
+        help="Data source (default: KOB_SOURCE env or 'mock')",
+    )
+    p_run.add_argument(
+        "--tick",
+        type=int,
+        default=60,
+        help="Seconds between loop cycles; exits are checked every cycle "
+        "(default 60)",
+    )
+    p_run.add_argument(
+        "--no-paper",
+        action="store_true",
+        help="Scan/manage only; do not open paper positions on signals",
+    )
+    p_run.add_argument(
+        "--ignore-market-hours",
+        action="store_true",
+        help="Bypass the market-open check and always act (testing only)",
+    )
+    p_run.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single cycle then exit (useful for cron/testing)",
+    )
+    p_run.set_defaults(func=cmd_run)
 
     return parser
 

@@ -60,10 +60,16 @@ account_tiers:
 # (an option can lose all value within hours) and is intentionally kept off the
 # smallest tier. Tune after a real Tradier backtest.
 strategies:
+  default:
+    # The base weekly momentum trade. Only its scan cadence is set here; its
+    # filters/exits come from the base (tier-adjusted) config sections below.
+    scan_interval_minutes: 15
   zerodte:
     # Same-day / next-day expiries. Needs real delta to move, wider spreads
     # tolerated, fast profit-take, hard same-day exit (max_holding_days: 0).
     signal: momentum
+    # Fast-moving, same-day expiry: hunt for entries every couple of minutes.
+    scan_interval_minutes: 2
     contract_filters:
       min_dte: 0
       max_dte: 1
@@ -79,6 +85,8 @@ strategies:
     # Multi-day directional trades. Longer expiries give the move room to
     # develop, so a wider stop and a multi-day hold, exiting before theta bites.
     signal: momentum
+    # Multi-day horizon: a look every half hour is plenty for entries.
+    scan_interval_minutes: 30
     contract_filters:
       min_dte: 7
       max_dte: 21
@@ -94,6 +102,8 @@ strategies:
     # Long-dated, high-conviction directional bets. Deep-ish delta for share
     # substitution, patient hold measured in weeks, exit well before expiry.
     signal: momentum
+    # Long horizon: entries only need checking a few times a day.
+    scan_interval_minutes: 180
     contract_filters:
       min_dte: 180
       max_dte: 540

@@ -66,6 +66,11 @@ class StrategyConfig:
     signal: str
     filters: "ContractFilters"
     exits: "ExitConfig"
+    #: How often (minutes) the run loop hunts for NEW entries with this
+    #: strategy. Exit management always runs every loop tick regardless; this
+    #: only paces entries, so a 0DTE scalp can scan every minute while LEAPS
+    #: only look once a day.
+    scan_interval_minutes: int = 5
 
 
 @dataclass(frozen=True)
@@ -289,15 +294,27 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             signal="momentum",
             filters=filters_cfg,
             exits=exits_cfg,
+            scan_interval_minutes=int(
+                (raw.get("strategies", {}) or {}).get("default", {}).get(
+                    "scan_interval_minutes", 5
+                )
+            ),
         )
     }
     for name, prof in (raw.get("strategies", {}) or {}).items():
         prof = prof or {}
+        if name == "default":
+            continue
         sig = str(prof.get("signal", "momentum"))
         if sig not in _VALID_SIGNALS:
             raise ValueError(
                 f"strategy '{name}' has unknown signal '{sig}'. "
                 f"Valid signals: {sorted(_VALID_SIGNALS)}"
+            )
+        interval = int(prof.get("scan_interval_minutes", 5))
+        if interval <= 0:
+            raise ValueError(
+                f"strategy '{name}' scan_interval_minutes must be positive"
             )
         registry[name] = StrategyConfig(
             name=name,
@@ -306,6 +323,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
                 _overlay(filters, prof.get("contract_filters", {}))
             ),
             exits=_build_exits(_overlay(exits, prof.get("exits", {}))),
+            scan_interval_minutes=interval,
         )
 
     if tier and tier.get("strategies") is not None:

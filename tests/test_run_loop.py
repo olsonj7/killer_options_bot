@@ -1,0 +1,111 @@
+"""Tests for the `run` loop command (single-cycle, market hours bypassed)."""
+
+from __future__ import annotations
+
+import yaml
+
+from killer_options_bot.cli import main
+
+
+def _write_run_config(tmp_path):
+    """Minimal config with two strategies at different scan cadences."""
+    cfg = {
+        "account": {"value": 50000.0},
+        "mode": {"trading_mode": "paper"},
+        "watchlist": ["SPY", "QQQ"],
+        "risk": {
+            "max_trade_risk_pct": 0.30,
+            "max_open_positions": 10,
+            "max_trades_per_week": 100,
+        },
+        "contract_filters": {
+            "min_dte": 2,
+            "max_dte": 7,
+            "min_delta": 0.20,
+            "max_delta": 0.60,
+            "max_spread_pct": 0.20,
+            "min_volume": 1,
+            "min_open_interest": 1,
+        },
+        "exits": {
+            "profit_target_pct": 0.40,
+            "stop_loss_pct": 0.40,
+            "max_holding_days": 5,
+            "min_dte_exit": 0,
+        },
+        "storage": {"db_path": str(tmp_path / "run.db")},
+        "account_tiers": [
+            {"min_value": 0, "strategies": ["default", "swing"]},
+        ],
+        "strategies": {
+            "default": {"scan_interval_minutes": 15},
+            "swing": {
+                "scan_interval_minutes": 30,
+                "contract_filters": {"min_dte": 5, "max_dte": 21},
+            },
+        },
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    return path
+
+
+def test_run_once_ignoring_market_hours(tmp_path, capsys):
+    config_path = _write_run_config(tmp_path)
+    rc = main(
+        [
+            "--config",
+            str(config_path),
+            "run",
+            "--source",
+            "mock",
+            "--ignore-market-hours",
+            "--once",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Run loop starting" in out
+    assert "finished after 1 active cycle" in out
+    # Both strategies' cadences should be reported.
+    assert "default=15m" in out
+    assert "swing=30m" in out
+
+
+def test_run_once_no_paper_opens_nothing(tmp_path, capsys):
+    config_path = _write_run_config(tmp_path)
+    rc = main(
+        [
+            "--config",
+            str(config_path),
+            "run",
+            "--source",
+            "mock",
+            "--ignore-market-hours",
+            "--once",
+            "--no-paper",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "paper=off" in out
+    # In no-paper mode no positions are opened.
+    assert "opened #" not in out
+
+
+def test_run_rejects_tradier_without_token(tmp_path, capsys):
+    config_path = _write_run_config(tmp_path)
+    rc = main(
+        [
+            "--config",
+            str(config_path),
+            "run",
+            "--source",
+            "tradier",
+            "--once",
+            "--ignore-market-hours",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "requires a token" in err

@@ -149,3 +149,16 @@ class Scanner:
                 if candidate is not None:
                     results.append(candidate)
         return results
+
+    def scan_strategy(self, strategy: StrategyConfig) -> list[Candidate]:
+        """Scan the whole watchlist under a single strategy profile.
+
+        Used by the run loop, which paces each strategy's entry scans on its
+        own ``scan_interval_minutes`` while managing exits every tick.
+        """
+        results: list[Candidate] = []
+        for symbol in self.config.watchlist:
+            candidate = self.scan_symbol_strategy(symbol, strategy)
+            if candidate is not None:
+                results.append(candidate)
+        return results
