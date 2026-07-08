@@ -224,6 +224,25 @@ def cmd_pnl(args: argparse.Namespace) -> int:
     print(f"Open positions: {len(open_positions)}")
     print(f"Unrealized P/L: ${unrealized:+.2f}")
     print(f"Total P/L     : ${realized + unrealized:+.2f}")
+
+    if closed:
+        from killer_options_bot.web import _trade_stats
+
+        print()
+        print("Trade stats (R = multiple of risk; a full stop-out is -1R)")
+        print("-" * 57)
+        header = (
+            f"{'Type':<10} {'W':>3} {'L':>3} {'Total':>5} {'Win%':>5} "
+            f"{'AvgW':>7} {'AvgL':>7} {'R:R':>5} {'TotalR':>8}"
+        )
+        print(header)
+        for row in _trade_stats(closed):
+            print(
+                f"{row['type']:<10} {row['wins']:>3} {row['losses']:>3} "
+                f"{row['total']:>5} {row['win_rate']:>4.0%} "
+                f"{row['avg_winner']:>+6.2f}R {row['avg_loser']:>+6.2f}R "
+                f"{row['risk_reward']:>5.2f} {row['total_r']:>+7.2f}R"
+            )
     return 0
 
 
