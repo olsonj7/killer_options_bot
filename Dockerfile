@@ -22,6 +22,8 @@ RUN pip install --upgrade pip && \
 COPY config.yaml ./config.yaml
 
 # Railway provides PORT. Bind to all interfaces; auth is required for non-local
-# hosts (KOB_AUTH_USER / KOB_AUTH_PASS). DATABASE_URL selects Postgres.
+# hosts (KOB_AUTH_USER / KOB_AUTH_PASS). DATABASE_URL selects Postgres. The data
+# source defaults to mock; set KOB_SOURCE=tradier (+ TRADIER_API_TOKEN) to use
+# real market data.
 EXPOSE 8787
-CMD ["killer-options-bot", "serve", "--host", "0.0.0.0", "--source", "mock"]
+CMD ["killer-options-bot", "serve", "--host", "0.0.0.0"]

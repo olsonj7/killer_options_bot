@@ -383,13 +383,31 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from killer_options_bot.web import serve
 
     # Fail fast if the config is invalid before starting the server.
-    load_config(args.config)
+    config = load_config(args.config)
 
     # Env fallbacks make container/PaaS deployment (e.g. Railway) simple:
-    # PORT, KOB_AUTH_USER, KOB_AUTH_PASS.
+    # PORT, KOB_AUTH_USER, KOB_AUTH_PASS, KOB_SOURCE.
     host = args.host
     port = args.port if args.port is not None else int(os.getenv("PORT", "8787"))
     auth_user = args.auth_user or os.getenv("KOB_AUTH_USER")
+
+    # Data source: --source, else KOB_SOURCE env, else mock. This lets a deploy
+    # flip mock -> tradier by setting one env var (no code change / redeploy).
+    source = args.source or os.getenv("KOB_SOURCE", "mock")
+    if source not in {"mock", "tradier"}:
+        print(
+            f"Error: unknown source '{source}'. Use 'mock' or 'tradier' "
+            "(via --source or the KOB_SOURCE environment variable).",
+            file=sys.stderr,
+        )
+        return 1
+    if source == "tradier" and not config.tradier.api_token:
+        print(
+            "Error: source 'tradier' requires a token. Set TRADIER_API_TOKEN "
+            "(and optionally TRADIER_BASE_URL) in the environment.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Auth: username with password from --auth-pass or KOB_AUTH_PASS env.
     auth = None
@@ -414,7 +432,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     serve(
         config_path=args.config,
-        source=args.source,
+        source=source,
         host=host,
         port=port,
         auth=auth,
@@ -524,7 +542,10 @@ def build_parser() -> argparse.ArgumentParser:
         "serve", help="Run the local web dashboard (127.0.0.1, no auth)"
     )
     p_serve.add_argument(
-        "--source", choices=["mock", "tradier"], default="mock"
+        "--source",
+        choices=["mock", "tradier"],
+        default=None,
+        help="Data source (default: KOB_SOURCE env or 'mock')",
     )
     p_serve.add_argument("--host", default="127.0.0.1", help="Bind host")
     p_serve.add_argument(
