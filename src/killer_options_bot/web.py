@@ -35,6 +35,7 @@ from killer_options_bot.models import PaperPosition
 from killer_options_bot.paper import PaperEngine
 from killer_options_bot.scanner import Scanner
 from killer_options_bot.storage import BaseStorage, get_storage
+from killer_options_bot.withdraw import advise_from_storage
 
 
 def _build_data_source(source: str, config: Config) -> MarketData:
@@ -289,6 +290,52 @@ def _equity_curve_svg(
     text-anchor="end">ending {_fmt_money(final)}</text>
 </svg>"""
 
+def _render_withdraw_section(config: Config, storage: "BaseStorage") -> str:
+    """Render the withdrawal advisor block, or nothing when disabled."""
+    if not config.withdraw.enabled:
+        return ""
+    advice = advise_from_storage(config.withdraw, storage)
+
+    cards = (
+        f"<div class='card'><div class='label'>Equity (banked)</div>"
+        f"<div class='value'>{_fmt_money(advice.equity)}</div></div>"
+        f"<div class='card'><div class='label'>Peak</div>"
+        f"<div class='value'>{_fmt_money(advice.peak_equity)}</div></div>"
+        f"<div class='card'><div class='label'>Gain</div>"
+        f"<div class='value'>{_fmt_money(advice.gain)}</div></div>"
+        f"<div class='card'><div class='label'>Drawdown</div>"
+        f"<div class='value'>{advice.drawdown_pct:.0%}</div></div>"
+    )
+
+    if advice.recommendations:
+        items = "".join(
+            f"<li><strong>{html.escape(_WD_LABELS.get(r.kind, r.kind))}: "
+            f"{_fmt_money(r.amount)}</strong> &mdash; "
+            f"{html.escape(r.reason)}</li>"
+            for r in advice.recommendations
+        )
+        body = f"<ul class='wd-list'>{items}</ul>"
+    else:
+        body = (
+            "<div class='muted' style='text-align:left;'>No action suggested "
+            "right now &mdash; keep it all working.</div>"
+        )
+
+    return f"""
+  <h2 style="font-size:15px;">Withdrawal advisor
+    <span class="warn" style="font-weight:400;">(advisory only &mdash; the bot never moves money)</span>
+  </h2>
+  <div class="cards">{cards}</div>
+  <div class="wd-box">{body}</div>
+"""
+
+
+_WD_LABELS = {
+    "profit_skim": "Skim profits",
+    "milestone": "Milestone reached",
+    "tax_reserve": "Tax reserve",
+    "drawdown_defense": "De-risk (drawdown)",
+}
 
 def _render_page(
     config: Config,
@@ -371,6 +418,8 @@ def _render_page(
     max_risk = config.account_value * config.risk.max_trade_risk_pct
     equity_svg = _equity_curve_svg(closed, unrealized=unrealized)
 
+    withdraw_html = _render_withdraw_section(config, storage)
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -412,9 +461,13 @@ def _render_page(
   .warn {{ color: #d29922; font-size: 12px; margin-top: 8px; }}
   .chart {{ background: #161b22; border: 1px solid #30363d;
             border-radius: 8px; margin-bottom: 28px; }}
+  .wd-box {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+             padding: 12px 18px; margin-bottom: 28px; }}
+  .wd-list {{ margin: 0; padding-left: 18px; }}
+  .wd-list li {{ font-size: 13px; color: #c9d1d9; margin: 6px 0; }}
+  .wd-list strong {{ color: #d29922; }}
   a.nav {{ color: #58a6ff; text-decoration: none; font-size: 13px; }}
-  a.nav:hover {{ text-decoration: underline; }}
-</style>
+  a.nav:hover {{ text-decoration: underline; }}</style>
 </head>
 <body>
 <header>
@@ -456,6 +509,8 @@ def _render_page(
 
   <h2 style="font-size:15px;">Equity curve (realized solid, open marks dashed)</h2>
   <div class="chart">{equity_svg}</div>
+
+  {withdraw_html}
 
   <h2 style="font-size:15px;">Open positions</h2>
   <table>

@@ -227,6 +227,46 @@ def cmd_pnl(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_withdraw(args: argparse.Namespace) -> int:
+    from killer_options_bot.withdraw import advise_from_storage
+
+    config = load_config(args.config)
+    storage = get_storage(config)
+
+    if not config.withdraw.enabled:
+        print(
+            "Withdrawal advisor is disabled. Set withdraw.enabled: true in "
+            "config.yaml to use it."
+        )
+        return 0
+
+    advice = advise_from_storage(config.withdraw, storage)
+    print("Withdrawal advisor (advisory only \u2014 no money is moved)")
+    print("-----------------------------------------------------")
+    print(f"Starting capital : ${advice.starting_capital:,.2f}")
+    print(f"Equity (banked)  : ${advice.equity:,.2f}")
+    print(f"Peak equity      : ${advice.peak_equity:,.2f}")
+    print(f"Gain             : ${advice.gain:+,.2f}")
+    print(f"Drawdown         : {advice.drawdown_pct:.0%}")
+    print()
+    if not advice.recommendations:
+        print("No action suggested right now \u2014 keep it all working.")
+        return 0
+
+    labels = {
+        "profit_skim": "Skim profits",
+        "milestone": "Milestone reached",
+        "tax_reserve": "Tax reserve",
+        "drawdown_defense": "De-risk (drawdown)",
+    }
+    print("Recommendations:")
+    for r in advice.recommendations:
+        label = labels.get(r.kind, r.kind)
+        print(f"  \u2022 {label}: ${r.amount:,.2f}")
+        print(f"    {r.reason}")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     from killer_options_bot.export import positions_to_csv
 
@@ -512,6 +552,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_pnl.add_argument("--source", choices=["mock", "tradier"], default="mock")
     p_pnl.add_argument("--as-of", help="Simulate on a date (YYYY-MM-DD)")
     p_pnl.set_defaults(func=cmd_pnl)
+
+    p_wd = sub.add_parser(
+        "withdraw",
+        help="Show withdrawal recommendations (advisory only, no money moved)",
+    )
+    p_wd.set_defaults(func=cmd_withdraw)
 
     p_export = sub.add_parser(
         "export", help="Export all positions as CSV (stdout or --output file)"

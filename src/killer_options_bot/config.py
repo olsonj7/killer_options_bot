@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -62,6 +62,28 @@ class LiveConfig:
 
 
 @dataclass(frozen=True)
+class WithdrawConfig:
+    """Rules for the (advisory-only) withdrawal advisor.
+
+    The advisor NEVER moves money; it only recommends when to take cash off the
+    table. All amounts are in dollars and computed from *realized* P/L (you can
+    only withdraw cash you've actually banked). A rule is inactive when its key
+    knob is 0. ``min_trading_balance`` is a floor the profit rules never dip
+    below so the account can keep trading; the defensive drawdown rule may go
+    below it because its whole point is to stop trading.
+    """
+
+    enabled: bool
+    starting_capital: float
+    min_trading_balance: float
+    skim_pct: float
+    tax_reserve_pct: float
+    milestones: tuple[tuple[float, float], ...]
+    drawdown_trigger_pct: float
+    drawdown_defense_pct: float
+
+
+@dataclass(frozen=True)
 class Config:
     account_value: float
     trading_mode: str
@@ -74,6 +96,18 @@ class Config:
     db_path: Path
     database_url: str | None
     tradier: TradierConfig
+    withdraw: "WithdrawConfig" = field(
+        default_factory=lambda: WithdrawConfig(
+            enabled=False,
+            starting_capital=0.0,
+            min_trading_balance=0.0,
+            skim_pct=0.0,
+            tax_reserve_pct=0.0,
+            milestones=(),
+            drawdown_trigger_pct=0.0,
+            drawdown_defense_pct=0.0,
+        )
+    )
 
 
 def _require(mapping: dict, key: str, section: str):
@@ -216,6 +250,41 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         base_url=os.getenv("TRADIER_BASE_URL", "https://sandbox.tradier.com/v1"),
     )
 
+    wd = raw.get("withdraw", {}) or {}
+    starting_capital = float(wd.get("starting_capital", 0.0)) or account_value
+    milestones_raw = wd.get("milestones", []) or []
+    milestones: list[tuple[float, float]] = []
+    for m in milestones_raw:
+        at = float(_require(m, "at", "withdraw.milestones"))
+        amount = float(_require(m, "withdraw", "withdraw.milestones"))
+        milestones.append((at, amount))
+    milestones.sort(key=lambda pair: pair[0])
+    skim_pct = float(wd.get("skim_pct", 0.0))
+    tax_reserve_pct = float(wd.get("tax_reserve_pct", 0.0))
+    drawdown_trigger_pct = float(wd.get("drawdown_trigger_pct", 0.0))
+    drawdown_defense_pct = float(wd.get("drawdown_defense_pct", 0.0))
+    for name, val in (
+        ("skim_pct", skim_pct),
+        ("tax_reserve_pct", tax_reserve_pct),
+        ("drawdown_trigger_pct", drawdown_trigger_pct),
+        ("drawdown_defense_pct", drawdown_defense_pct),
+    ):
+        if not 0 <= val <= 1:
+            raise ValueError(f"withdraw.{name} must be between 0 and 1")
+    withdraw_cfg = WithdrawConfig(
+        enabled=bool(wd.get("enabled", False)),
+        starting_capital=starting_capital,
+        min_trading_balance=float(
+            wd.get("min_trading_balance", 0.0)
+        )
+        or starting_capital,
+        skim_pct=skim_pct,
+        tax_reserve_pct=tax_reserve_pct,
+        milestones=tuple(milestones),
+        drawdown_trigger_pct=drawdown_trigger_pct,
+        drawdown_defense_pct=drawdown_defense_pct,
+    )
+
     return Config(
         account_value=account_value,
         trading_mode=trading_mode,
@@ -228,4 +297,5 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         db_path=db_path,
         database_url=database_url,
         tradier=tradier,
+        withdraw=withdraw_cfg,
     )

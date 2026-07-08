@@ -111,3 +111,31 @@ live:
   max_weekly_loss: 0
   # Hard cap on contracts per single order.
   max_contracts_per_order: 1
+
+withdraw:
+  # ADVISORY ONLY. The bot never moves money; it only recommends when to take
+  # cash off the table, based on your realized (banked) P/L. Set enabled: true
+  # to see recommendations on the dashboard and via `killer-options-bot withdraw`.
+  enabled: true
+  # Your original deposit. 0 = fall back to account.value. Equity is measured as
+  # starting_capital + realized P/L, and gains are measured above this.
+  starting_capital: 1000.0
+  # Profit rules never recommend leaving less than this in the account, so it can
+  # keep trading. 0 = fall back to starting_capital (never dip into principal).
+  min_trading_balance: 1000.0
+  # On each NEW equity high, skim this fraction of gains into savings. 0 = off.
+  skim_pct: 0.25
+  # Set aside this fraction of realized profit for taxes (short-term = ordinary
+  # income). This is a "reserve", not a spend. 0 = off.
+  tax_reserve_pct: 0.30
+  # Milestone ladder: when equity reaches `at`, suggest withdrawing `withdraw`.
+  # Highest reached rung is shown. Empty list = off.
+  milestones:
+    - {at: 2000.0, withdraw: 1000.0}   # get your original stake back out
+    - {at: 5000.0, withdraw: 1500.0}
+  # Defensive de-risking: if equity falls this fraction below its peak, suggest
+  # pulling drawdown_defense_pct of equity to cash. 0 = off. May go below the
+  # trading floor on purpose (the point is to stop trading).
+  drawdown_trigger_pct: 0.20
+  drawdown_defense_pct: 0.50
+
