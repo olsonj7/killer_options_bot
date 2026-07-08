@@ -82,6 +82,32 @@ def _require(mapping: dict, key: str, section: str):
     return mapping[key]
 
 
+def _select_tier(tiers: list, account_value: float) -> dict:
+    """Return the account-size tier whose ``min_value`` best fits the account.
+
+    Tiers let the strategy "bend" with account size: each tier is a dict with a
+    ``min_value`` threshold plus any config sections to overlay (e.g. ``risk``,
+    ``contract_filters``, ``exits``). The matching tier is the one with the
+    greatest ``min_value`` that is <= ``account_value``. Returns an empty dict
+    when no tiers are defined or none apply.
+    """
+    if not tiers:
+        return {}
+    applicable = [
+        t for t in tiers if float(t.get("min_value", 0)) <= account_value
+    ]
+    if not applicable:
+        return {}
+    return max(applicable, key=lambda t: float(t.get("min_value", 0)))
+
+
+def _overlay(base: dict, override: dict) -> dict:
+    """Shallow-merge ``override`` onto a copy of ``base`` (override wins)."""
+    merged = dict(base)
+    merged.update(override or {})
+    return merged
+
+
 def load_config(path: str | Path = "config.yaml") -> Config:
     """Load and validate configuration from YAML + environment."""
     load_dotenv()
@@ -104,6 +130,14 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     account_value = float(_require(account, "value", "account"))
     if account_value <= 0:
         raise ValueError("account.value must be positive")
+
+    # Account-size tiers: overlay the matching tier's sections so the strategy
+    # bends automatically with account value. No-op when no tiers are defined.
+    tier = _select_tier(raw.get("account_tiers", []), account_value)
+    if tier:
+        risk = _overlay(risk, tier.get("risk", {}))
+        filters = _overlay(filters, tier.get("contract_filters", {}))
+        exits = _overlay(exits, tier.get("exits", {}))
 
     trading_mode = str(mode.get("trading_mode", "scan")).lower()
     if trading_mode not in {"scan", "paper", "live"}:

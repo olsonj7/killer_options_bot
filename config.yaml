@@ -5,6 +5,37 @@ account:
   # Your account size in dollars. Used to size and reject trades.
   value: 1000.0
 
+# Account-size tiers: the strategy "bends" automatically with account value.
+# The tier with the greatest min_value that is <= account.value is applied, and
+# its sections (risk / contract_filters / exits) are overlaid on top of the base
+# sections below. Only list the keys you want to change per tier; anything not
+# listed falls through to the base value. Remove this block to disable tiering.
+#
+# NOTE: these numbers are reasonable starting defaults, NOT validated on real
+# market data yet. Tune them after a Tradier backtest shows real behaviour.
+account_tiers:
+  - min_value: 0        # $0 - $5k: survival. Cheap OTM weeklies, tight stops.
+    risk:
+      max_trade_risk_pct: 0.30
+      max_open_positions: 2
+    contract_filters:
+      min_delta: 0.20
+      max_delta: 0.35
+  - min_value: 5000     # $5k - $25k: build. A bit more premium, some spread.
+    risk:
+      max_trade_risk_pct: 0.15
+      max_open_positions: 3
+    contract_filters:
+      min_delta: 0.30
+      max_delta: 0.45
+  - min_value: 25000    # $25k+: scale. PDT no longer binds; wider posture.
+    risk:
+      max_trade_risk_pct: 0.10
+      max_open_positions: 5
+    contract_filters:
+      min_delta: 0.35
+      max_delta: 0.50
+
 mode:
   # "scan" logs candidates only. "paper" also opens simulated positions.
   # "live" enables real orders but ONLY behind every guardrail in the "live"
