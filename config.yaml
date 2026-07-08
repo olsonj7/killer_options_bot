@@ -9,31 +9,29 @@ mode:
   # "scan" logs candidates only. "paper" also opens simulated positions.
   # "live" enables real orders but ONLY behind every guardrail in the "live"
   # section below (kill switch, loss lockouts, --i-understand-live, etc.).
-  trading_mode: scan
+  trading_mode: paper
 
 watchlist:
   - SPY
   - QQQ
-  - AAPL
-  - MSFT
-  - NVDA
-  - AMD
-  - TSLA
 
 
 risk:
-  # Fraction of account allowed at risk per trade (0.05 = 5%).
-  max_trade_risk_pct: 0.05
+  # Fraction of account allowed at risk per trade (0.15 = 15%).
+  # Small accounts need a wider cap so a real weekly contract fits; the tight
+  # stop-loss below is what actually caps the dollar loss per trade.
+  max_trade_risk_pct: 0.15
   # Max simultaneous open positions (enforced in paper/live phases).
-  max_open_positions: 1
+  max_open_positions: 3
   # Max new trades logged per calendar week.
-  max_trades_per_week: 2
+  max_trades_per_week: 10
 
 contract_filters:
-  min_dte: 30
-  max_dte: 60
-  # Absolute delta band for the long option.
-  min_delta: 0.30
+  # Weekly / short-dated horizon for a small-account challenge.
+  min_dte: 0
+  max_dte: 7
+  # Absolute delta band for the long option. Slightly-OTM keeps tickets cheap.
+  min_delta: 0.25
   max_delta: 0.45
   # Reject if (ask - bid) / mid exceeds this fraction.
   max_spread_pct: 0.12
@@ -49,14 +47,15 @@ signal:
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.
-  # Take profit when the option mid is up this fraction (0.35 = +35%).
-  profit_target_pct: 0.35
-  # Cut the loss when the option mid is down this fraction (0.45 = -45%).
-  stop_loss_pct: 0.45
+  # Take profit when the option mid is up this fraction (0.30 = +30%).
+  profit_target_pct: 0.30
+  # Cut the loss when the option mid is down this fraction (0.25 = -25%).
+  # Tight stop: high-conviction, small-loss posture for weekly trades.
+  stop_loss_pct: 0.25
   # Force an exit once the position has been held this many days.
-  max_holding_days: 21
-  # Also exit if DTE falls to or below this (avoid the final gamma/theta zone).
-  min_dte_exit: 21
+  max_holding_days: 3
+  # Also exit if DTE falls to or below this (0 = only force-exit at expiry).
+  min_dte_exit: 0
 
 storage:
   db_path: data/killer_options_bot.db

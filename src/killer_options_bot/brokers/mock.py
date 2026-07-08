@@ -47,9 +47,13 @@ class MockMarketData:
         seed = _seed(symbol)
         base = _base_price(symbol)
         t = (day - _ANCHOR).days
-        drift = ((seed % 7) - 3) / 1000.0  # small per-symbol daily drift
+        slope = ((seed % 7) - 3) / 1000.0  # per-symbol drift direction
+        # Bounded trend (+/-12% of base): real indices don't trend in a straight
+        # line, and this keeps ``last`` near the stable strike ladder so in-band
+        # OTM strikes always exist on both sides.
+        trend = math.tanh(slope * t * 4) * (base * 0.12)
         wobble = math.sin((seed % 13) + t / 9.0) * (base * 0.03)
-        return round(max(1.0, base * (1 + drift * t) + wobble), 2)
+        return round(max(1.0, base + trend + wobble), 2)
 
     def _current_price(self, symbol: str) -> float:
         return self._price_on(symbol, self.as_of)
@@ -65,16 +69,33 @@ class MockMarketData:
     # --- Options -----------------------------------------------------------
 
     def _expirations(self) -> list[date]:
-        """Monthly expirations (15th) still in the future relative to as_of."""
-        result: list[date] = []
+        """Upcoming expirations: weekly Fridays plus monthly (15th) dates.
+
+        Weekly Fridays for the next ~8 weeks enable 0-7 DTE (weekly) strategies;
+        the monthly ladder remains for longer-dated swing trades. All values are
+        absolute calendar dates, so a given option's OCC symbol stays stable as
+        ``as_of`` advances and an open position can be re-priced later.
+        """
+        result: set[date] = set()
+
+        # Weekly Fridays (weekday(): Mon=0 ... Fri=4).
+        days_ahead = (4 - self.as_of.weekday()) % 7
+        first_friday = self.as_of + timedelta(days=days_ahead)
+        for week in range(8):
+            exp = first_friday + timedelta(weeks=week)
+            if exp > self.as_of:
+                result.add(exp)
+
+        # Monthly (15th) expirations for longer-dated strategies.
         for offset in range(-3, 12):
             month_index = (_ANCHOR.month - 1) + offset
             year = _ANCHOR.year + month_index // 12
             month = month_index % 12 + 1
             exp = date(year, month, 15)
             if exp > self.as_of:
-                result.append(exp)
-        return result
+                result.add(exp)
+
+        return sorted(result)
 
     def get_option_chain(
         self, symbol: str, side: Side
@@ -86,7 +107,11 @@ class MockMarketData:
 
         for expiration in self._expirations():
             dte = (expiration - self.as_of).days
-            for k, offset in enumerate((-0.10, -0.05, 0.0, 0.05, 0.10)):
+            # Wide, fine strike ladder (+/-14% in 2% steps). Anchored to the
+            # stable base price, it must be wide enough that in-band (0.25-0.45
+            # delta) strikes still exist after ``last`` has drifted over time.
+            offsets = [round(-0.14 + 0.02 * i, 2) for i in range(15)]
+            for k, offset in enumerate(offsets):
                 # Strikes anchored to the STABLE base price -> stable symbols.
                 strike = round(base * (1 + offset), 1)
 
