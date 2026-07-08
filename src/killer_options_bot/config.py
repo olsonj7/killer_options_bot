@@ -51,6 +51,24 @@ class ExitConfig:
 
 
 @dataclass(frozen=True)
+class StrategyConfig:
+    """A named strategy "method": its own contract filters + exit rules.
+
+    Strategies let higher account tiers unlock additional playbooks (0DTE
+    scalps, swings, LEAPS, ...) alongside the base weekly momentum trade. Each
+    strategy carries the DTE/delta window it hunts in and the exit rules used to
+    manage the positions it opens, so a 0DTE scalp and a LEAPS hold can coexist
+    with completely different management. ``signal`` selects which entry signal
+    generates its trades (currently only "momentum").
+    """
+
+    name: str
+    signal: str
+    filters: "ContractFilters"
+    exits: "ExitConfig"
+
+
+@dataclass(frozen=True)
 class LiveConfig:
     """Guardrails for live order placement. Disabled by default."""
 
@@ -96,6 +114,7 @@ class Config:
     db_path: Path
     database_url: str | None
     tradier: TradierConfig
+    strategies: tuple["StrategyConfig", ...] = ()
     withdraw: "WithdrawConfig" = field(
         default_factory=lambda: WithdrawConfig(
             enabled=False,
@@ -108,6 +127,22 @@ class Config:
             drawdown_defense_pct=0.0,
         )
     )
+
+    @property
+    def active_strategies(self) -> tuple["StrategyConfig", ...]:
+        """Strategies to run. Falls back to a single default profile built from
+        the base filters/exits so code paths that don't configure strategies
+        (and direct ``Config`` construction in tests) keep working unchanged."""
+        if self.strategies:
+            return self.strategies
+        return (
+            StrategyConfig(
+                name="default",
+                signal="momentum",
+                filters=self.filters,
+                exits=self.exits,
+            ),
+        )
 
 
 def _require(mapping: dict, key: str, section: str):
@@ -140,6 +175,41 @@ def _overlay(base: dict, override: dict) -> dict:
     merged = dict(base)
     merged.update(override or {})
     return merged
+
+
+def _build_filters(d: dict) -> ContractFilters:
+    cfg = ContractFilters(
+        min_dte=int(d.get("min_dte", 30)),
+        max_dte=int(d.get("max_dte", 60)),
+        min_delta=float(d.get("min_delta", 0.30)),
+        max_delta=float(d.get("max_delta", 0.45)),
+        max_spread_pct=float(d.get("max_spread_pct", 0.12)),
+        min_volume=int(d.get("min_volume", 100)),
+        min_open_interest=int(d.get("min_open_interest", 500)),
+    )
+    if cfg.min_dte > cfg.max_dte:
+        raise ValueError("min_dte must be <= max_dte")
+    if cfg.min_delta > cfg.max_delta:
+        raise ValueError("min_delta must be <= max_delta")
+    return cfg
+
+
+def _build_exits(d: dict) -> ExitConfig:
+    cfg = ExitConfig(
+        profit_target_pct=float(d.get("profit_target_pct", 0.35)),
+        stop_loss_pct=float(d.get("stop_loss_pct", 0.45)),
+        max_holding_days=int(d.get("max_holding_days", 21)),
+        min_dte_exit=int(d.get("min_dte_exit", 21)),
+    )
+    if cfg.profit_target_pct <= 0:
+        raise ValueError("exits.profit_target_pct must be positive")
+    if not 0 < cfg.stop_loss_pct <= 1:
+        raise ValueError("exits.stop_loss_pct must be between 0 and 1")
+    return cfg
+
+
+_VALID_SIGNALS = {"momentum"}
+
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:
@@ -197,19 +267,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     if not 0 < risk_cfg.max_trade_risk_pct <= 1:
         raise ValueError("risk.max_trade_risk_pct must be between 0 and 1")
 
-    filters_cfg = ContractFilters(
-        min_dte=int(filters.get("min_dte", 30)),
-        max_dte=int(filters.get("max_dte", 60)),
-        min_delta=float(filters.get("min_delta", 0.30)),
-        max_delta=float(filters.get("max_delta", 0.45)),
-        max_spread_pct=float(filters.get("max_spread_pct", 0.12)),
-        min_volume=int(filters.get("min_volume", 100)),
-        min_open_interest=int(filters.get("min_open_interest", 500)),
-    )
-    if filters_cfg.min_dte > filters_cfg.max_dte:
-        raise ValueError("min_dte must be <= max_dte")
-    if filters_cfg.min_delta > filters_cfg.max_delta:
-        raise ValueError("min_delta must be <= max_delta")
+    filters_cfg = _build_filters(filters)
 
     signal_cfg = SignalConfig(
         sma_period=int(signal.get("sma_period", 20)),
@@ -218,16 +276,52 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         rsi_max=float(signal.get("rsi_max", 70)),
     )
 
-    exits_cfg = ExitConfig(
-        profit_target_pct=float(exits.get("profit_target_pct", 0.35)),
-        stop_loss_pct=float(exits.get("stop_loss_pct", 0.45)),
-        max_holding_days=int(exits.get("max_holding_days", 21)),
-        min_dte_exit=int(exits.get("min_dte_exit", 21)),
-    )
-    if exits_cfg.profit_target_pct <= 0:
-        raise ValueError("exits.profit_target_pct must be positive")
-    if not 0 < exits_cfg.stop_loss_pct <= 1:
-        raise ValueError("exits.stop_loss_pct must be between 0 and 1")
+    exits_cfg = _build_exits(exits)
+
+    # --- Strategy profiles ------------------------------------------------
+    # Each named strategy overlays its own contract_filters/exits on the base
+    # (tier-adjusted) sections. "default" is always available and mirrors the
+    # base weekly trade. A tier's optional 'strategies' list selects which
+    # profiles are active for that account size (higher tiers unlock more).
+    registry: dict[str, StrategyConfig] = {
+        "default": StrategyConfig(
+            name="default",
+            signal="momentum",
+            filters=filters_cfg,
+            exits=exits_cfg,
+        )
+    }
+    for name, prof in (raw.get("strategies", {}) or {}).items():
+        prof = prof or {}
+        sig = str(prof.get("signal", "momentum"))
+        if sig not in _VALID_SIGNALS:
+            raise ValueError(
+                f"strategy '{name}' has unknown signal '{sig}'. "
+                f"Valid signals: {sorted(_VALID_SIGNALS)}"
+            )
+        registry[name] = StrategyConfig(
+            name=name,
+            signal=sig,
+            filters=_build_filters(
+                _overlay(filters, prof.get("contract_filters", {}))
+            ),
+            exits=_build_exits(_overlay(exits, prof.get("exits", {}))),
+        )
+
+    if tier and tier.get("strategies") is not None:
+        active_names = list(tier.get("strategies"))
+    else:
+        active_names = ["default"]
+    if not active_names:
+        raise ValueError("a tier's 'strategies' list must not be empty")
+    active_strategies: list[StrategyConfig] = []
+    for nm in active_names:
+        if nm not in registry:
+            raise ValueError(
+                f"unknown strategy '{nm}'. Define it under 'strategies:'. "
+                f"Known strategies: {sorted(registry)}"
+            )
+        active_strategies.append(registry[nm])
 
     db_path = Path(storage.get("db_path", "data/killer_options_bot.db"))
     # Hosted DB (e.g. Supabase) takes precedence when provided.
@@ -302,5 +396,6 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         db_path=db_path,
         database_url=database_url,
         tradier=tradier,
+        strategies=tuple(active_strategies),
         withdraw=withdraw_cfg,
     )

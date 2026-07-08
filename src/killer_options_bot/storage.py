@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_date TEXT NOT NULL,
     status TEXT NOT NULL,
     mode TEXT NOT NULL DEFAULT 'paper',
+    strategy TEXT NOT NULL DEFAULT 'default',
     broker_order_id TEXT,
     exit_price {d.real},
     exit_date TEXT,
@@ -130,6 +131,34 @@ class BaseStorage:
                 stmt = statement.strip()
                 if stmt:
                     conn.execute(stmt)
+        self._migrate()
+
+    def _existing_columns(self, table: str) -> set[str]:
+        """Return the set of column names on ``table`` for the active backend."""
+        if self.dialect.placeholder == "?":  # SQLite
+            rows = self._query_all(f"PRAGMA table_info({table})")
+            return {r["name"] for r in rows}
+        rows = self._query_all(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_name = ?",
+            (table,),
+        )
+        return {r["name"] for r in rows}
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a DB was first created.
+
+        Uses plain ``ALTER TABLE ... ADD COLUMN`` guarded by an existence check
+        so it is safe on both SQLite (no ADD COLUMN IF NOT EXISTS) and Postgres,
+        and is a no-op on already-current databases.
+        """
+        cols = self._existing_columns("positions")
+        if cols and "strategy" not in cols:
+            with self._connect() as conn:
+                conn.execute(
+                    "ALTER TABLE positions ADD COLUMN strategy TEXT "
+                    "NOT NULL DEFAULT 'default'"
+                )
 
     # --- Candidates --------------------------------------------------------
 
@@ -225,6 +254,7 @@ class BaseStorage:
                 else None
             ),
             exit_reason=row.get("exit_reason"),
+            strategy=row.get("strategy") or "default",
         )
 
     def open_position(
@@ -238,8 +268,8 @@ class BaseStorage:
             INSERT INTO positions (
                 option_symbol, underlying, side, strike, expiration,
                 quantity, entry_price, entry_date, status, mode,
-                broker_order_id, exit_price, exit_date, exit_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                broker_order_id, exit_price, exit_date, exit_reason, strategy
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 position.option_symbol,
@@ -256,6 +286,7 @@ class BaseStorage:
                 position.exit_price,
                 position.exit_date.isoformat() if position.exit_date else None,
                 position.exit_reason,
+                position.strategy,
             ),
         )
         return position.id

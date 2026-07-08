@@ -19,6 +19,8 @@ account_tiers:
     # Small account stays on the two most liquid ETFs only. Tight spreads and
     # deep options chains matter far more than variety when capital is tiny.
     watchlist: [SPY, QQQ]
+    # Only the base weekly momentum trade. No 0DTE gambling on a tiny account.
+    strategies: [default]
     risk:
       max_trade_risk_pct: 0.30
       max_open_positions: 2
@@ -28,6 +30,8 @@ account_tiers:
   - min_value: 5000     # $5k - $25k: build. A bit more premium, some spread.
     # Room to add a couple more highly-liquid names as the account grows.
     watchlist: [SPY, QQQ, IWM, AAPL]
+    # Weekly trade plus a small allocation of intraday 0DTE scalps.
+    strategies: [default, zerodte]
     risk:
       max_trade_risk_pct: 0.15
       max_open_positions: 3
@@ -36,12 +40,41 @@ account_tiers:
       max_delta: 0.45
   - min_value: 25000    # $25k+: scale. PDT no longer binds; wider posture.
     watchlist: [SPY, QQQ, IWM, AAPL, NVDA, MSFT, AMD]
+    strategies: [default, zerodte]
     risk:
       max_trade_risk_pct: 0.10
       max_open_positions: 5
     contract_filters:
       min_delta: 0.35
       max_delta: 0.50
+
+# Strategy "methods" (playbooks). Each overlays its own contract_filters/exits
+# on top of the (tier-adjusted) base sections below; anything it doesn't set
+# falls through to the base. A tier's `strategies:` list picks which are active
+# for that account size. "default" is always available (the base weekly trade)
+# and need not be defined here. Positions remember which strategy opened them,
+# so each is managed with its own exits. signal currently supports: momentum.
+#
+# NOTE: unvalidated starting numbers. 0DTE is the highest-variance play here
+# (an option can lose all value within hours) and is intentionally kept off the
+# smallest tier. Tune after a real Tradier backtest.
+strategies:
+  zerodte:
+    # Same-day / next-day expiries. Needs real delta to move, wider spreads
+    # tolerated, fast profit-take, hard same-day exit (max_holding_days: 0).
+    signal: momentum
+    contract_filters:
+      min_dte: 0
+      max_dte: 1
+      min_delta: 0.35
+      max_delta: 0.55
+      max_spread_pct: 0.18
+    exits:
+      profit_target_pct: 0.40
+      stop_loss_pct: 0.30
+      max_holding_days: 0
+      min_dte_exit: 0
+
 
 mode:
   # "scan" logs candidates only. "paper" also opens simulated positions.

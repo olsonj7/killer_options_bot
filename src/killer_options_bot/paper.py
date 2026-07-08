@@ -81,6 +81,18 @@ class PaperEngine:
             return round(intrinsic, 2)
         return self.cost_model.settle_fill(intrinsic)
 
+    def _exits_for(self, position: PaperPosition):
+        """Exit rules for a position, resolved by the strategy that opened it.
+
+        A 0DTE scalp and a LEAPS hold must be managed with different rules, so
+        each position is exited under its own strategy's exits. Falls back to
+        the base exits when the strategy is unknown (e.g. removed from config).
+        """
+        for strat in self.config.active_strategies:
+            if strat.name == position.strategy:
+                return strat.exits
+        return self.config.exits
+
     # --- Opening -----------------------------------------------------------
 
     def open_from_candidate(
@@ -109,6 +121,7 @@ class PaperEngine:
             entry_price=self._entry_price(c),
             entry_date=self.as_of,
             status=PositionStatus.OPEN,
+            strategy=candidate.strategy,
         )
         self.storage.open_position(position)
         return position
@@ -119,7 +132,7 @@ class PaperEngine:
         self, position: PaperPosition, option_price: float
     ) -> str | None:
         """Return an exit reason if any rule triggers, else None."""
-        e = self.config.exits
+        e = self._exits_for(position)
         pl_pct = position.pl_pct(option_price)
 
         if pl_pct >= e.profit_target_pct:

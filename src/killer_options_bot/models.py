@@ -138,6 +138,7 @@ class Candidate:
     signal_note: str
     decision: RiskDecision
     max_loss: float
+    strategy: str = "default"
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -166,6 +167,7 @@ class PaperPosition:
     exit_price: float | None = None
     exit_date: date | None = None
     exit_reason: str | None = None
+    strategy: str = "default"
     id: int | None = None
 
     @property
