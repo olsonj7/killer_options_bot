@@ -67,6 +67,53 @@ class OptionContract:
 
 
 @dataclass(frozen=True)
+class CostModel:
+    """Models the real cost of getting in and out of an option position.
+
+    Backtests that fill at the mid price systematically overstate their edge:
+    in reality you BUY at (near) the ask and SELL at (near) the bid, and each
+    contract carries a commission. Both effects are folded into the per-share
+    fill price so realized P/L (which multiplies by 100) already reflects them.
+
+    - ``slippage_frac`` is the fraction of the half-spread you cross. 1.0 means
+      you pay the full ask on entry and receive the full bid on exit (the
+      conservative, realistic default for illiquid weeklies). 0.0 means mid.
+    - ``commission_per_contract`` is charged on BOTH entry and exit.
+    """
+
+    commission_per_contract: float = 0.65
+    slippage_frac: float = 1.0
+
+    @classmethod
+    def free(cls) -> "CostModel":
+        """A zero-cost model (fills at mid, no commission)."""
+        return cls(commission_per_contract=0.0, slippage_frac=0.0)
+
+    @staticmethod
+    def _half_spread(contract: "OptionContract") -> float:
+        return max(0.0, (contract.ask - contract.bid) / 2)
+
+    def _adjustment(self, contract: "OptionContract") -> float:
+        """Per-share penalty applied to a fill: half-spread + commission."""
+        return (
+            self._half_spread(contract) * self.slippage_frac
+            + self.commission_per_contract / 100
+        )
+
+    def entry_fill(self, contract: "OptionContract") -> float:
+        """Per-share price actually paid to BUY one contract (worse than mid)."""
+        return round(contract.mid + self._adjustment(contract), 4)
+
+    def exit_fill(self, contract: "OptionContract") -> float:
+        """Per-share price actually received to SELL one contract."""
+        return round(max(0.0, contract.mid - self._adjustment(contract)), 4)
+
+    def settle_fill(self, intrinsic: float) -> float:
+        """Per-share settlement at expiry: commission only, no spread."""
+        return round(max(0.0, intrinsic - self.commission_per_contract / 100), 4)
+
+
+@dataclass(frozen=True)
 class RiskDecision:
     """Result of running a contract through the risk engine."""
 

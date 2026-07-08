@@ -15,13 +15,25 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Callable
 
+from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.brokers.mock import MockMarketData
 from killer_options_bot.config import Config
-from killer_options_bot.models import PaperPosition
+from killer_options_bot.models import CostModel, PaperPosition
 from killer_options_bot.paper import PaperEngine
 from killer_options_bot.scanner import Scanner
 from killer_options_bot.storage import Storage
+
+
+#: A data-source factory maps a date to a MarketData for that day. The default
+#: uses the deterministic offline mock; swap in a historical source (e.g.
+#: Tradier) here to backtest on real data without touching the rest of the loop.
+DataFactory = Callable[[date], MarketData]
+
+
+def _default_data_factory(as_of: date) -> MarketData:
+    return MockMarketData(as_of=as_of)
 
 
 @dataclass
@@ -94,6 +106,29 @@ class BacktestStats:
         )
 
     @property
+    def pl_std(self) -> float:
+        """Sample standard deviation of per-trade P/L (dollars)."""
+        n = self.num_trades
+        if n < 2:
+            return 0.0
+        mean = self.total_pl / n
+        var = sum((t.pl - mean) ** 2 for t in self.trades) / (n - 1)
+        return round(var ** 0.5, 2)
+
+    @property
+    def t_stat(self) -> float:
+        """t-statistic of mean per-trade P/L vs zero.
+
+        Roughly, |t| >= 2 with a decent sample (N >= ~100) is the minimum bar
+        for treating a positive expectancy as more than noise. Small N or high
+        variance drags this toward zero regardless of a pretty win rate.
+        """
+        std = self.pl_std
+        if self.num_trades < 2 or std == 0:
+            return 0.0
+        return round((self.total_pl / self.num_trades) / (std / self.num_trades ** 0.5), 2)
+
+    @property
     def profit_factor(self) -> float:
         gross_win = sum(t.pl for t in self.wins)
         gross_loss = -sum(t.pl for t in self.losses)
@@ -122,11 +157,19 @@ class Backtester:
         end: date,
         step_days: int = 1,
         db_path: str | None = None,
+        data_factory: DataFactory | None = None,
+        cost_model: CostModel | None = None,
     ):
         self.config = config
         self.start = start
         self.end = end
         self.step_days = max(1, step_days)
+        # Pluggable data source (mock by default) so the exact same loop can be
+        # run against historical real-market data once it is wired up.
+        self.data_factory = data_factory or _default_data_factory
+        # Realistic costs by default: filling at the mid overstates edge badly
+        # for weekly options. Pass CostModel.free() to reproduce old behaviour.
+        self.cost_model = cost_model if cost_model is not None else CostModel()
         # Isolated store so the real trade log is never touched. The storage
         # layer opens a fresh connection per call, so an in-memory DB would not
         # persist across calls; use a throwaway temp file instead.
@@ -144,10 +187,16 @@ class Backtester:
     def run(self) -> BacktestStats:
         current = self.start
         while current <= self.end:
-            data = MockMarketData(as_of=current)
+            data = self.data_factory(current)
 
             # 1) Manage existing positions first (exits before new entries).
-            paper = PaperEngine(self.config, data, self.storage, as_of=current)
+            paper = PaperEngine(
+                self.config,
+                data,
+                self.storage,
+                as_of=current,
+                cost_model=self.cost_model,
+            )
             paper.manage_all()
 
             # 2) Scan and open new positions for allowed candidates.
@@ -161,10 +210,14 @@ class Backtester:
         # Force-close anything still open at the final date for clean stats.
         final = self.end
         paper = PaperEngine(
-            self.config, MockMarketData(as_of=final), self.storage, as_of=final
+            self.config,
+            self.data_factory(final),
+            self.storage,
+            as_of=final,
+            cost_model=self.cost_model,
         )
         for position in self.storage.open_positions():
-            price = paper.mark_to_market(position)
+            price = paper.exit_fill_price(position)
             if price is not None:
                 self.storage.close_position(
                     position.id, price, final, "backtest end (forced close)"

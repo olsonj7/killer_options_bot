@@ -324,6 +324,7 @@ def cmd_live(args: argparse.Namespace) -> int:
 
 def cmd_backtest(args: argparse.Namespace) -> int:
     from killer_options_bot.backtest import Backtester
+    from killer_options_bot.models import CostModel
 
     config = load_config(args.config)
     try:
@@ -336,13 +337,31 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print("--end must be on or after --start", file=sys.stderr)
         return 1
 
-    bt = Backtester(config, start, end, step_days=args.step)
+    if args.no_costs:
+        cost_model = CostModel.free()
+    else:
+        cost_model = CostModel(
+            commission_per_contract=args.commission,
+            slippage_frac=args.slippage,
+        )
+
+    bt = Backtester(
+        config, start, end, step_days=args.step, cost_model=cost_model
+    )
     stats = bt.run()
 
+    if args.no_costs:
+        cost_txt = "costs OFF (fills at mid)"
+    else:
+        cost_txt = (
+            f"costs ON (${args.commission:.2f}/contract, "
+            f"{args.slippage:.0%} of spread)"
+        )
     print(
         f"Backtest {stats.start} -> {stats.end} "
         f"(step {args.step}d, account ${config.account_value:.2f})"
     )
+    print(cost_txt)
     print("=" * 46)
     if stats.num_trades == 0:
         print("No trades were taken. The picky bot stayed flat.")
@@ -363,6 +382,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     print(f"Avg loss      : ${stats.avg_loss:+.2f}")
     print(f"Profit factor : {pf_txt}")
     print(f"Max drawdown  : ${stats.max_drawdown:.2f}")
+    print(f"P/L std       : ${stats.pl_std:.2f} / trade")
+    print(f"t-stat        : {stats.t_stat:+.2f}  (|t|>=2 & N>=100 = credible)")
     print(f"Avg hold      : {avg_hold:.1f} days")
 
     if args.verbose:
@@ -532,6 +553,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     p_bt.add_argument(
         "--step", type=int, default=1, help="Days between steps (default 1)"
+    )
+    p_bt.add_argument(
+        "--commission",
+        type=float,
+        default=0.65,
+        help="Commission per contract, charged on entry and exit (default 0.65)",
+    )
+    p_bt.add_argument(
+        "--slippage",
+        type=float,
+        default=1.0,
+        help="Fraction of the half-spread crossed on each fill "
+        "(1.0 = full bid/ask, 0.0 = mid; default 1.0)",
+    )
+    p_bt.add_argument(
+        "--no-costs",
+        action="store_true",
+        help="Disable costs entirely (fill at mid, no commission)",
     )
     p_bt.add_argument(
         "--verbose", action="store_true", help="Print the full trade log"

@@ -19,6 +19,7 @@ from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config
 from killer_options_bot.models import (
     Candidate,
+    CostModel,
     OptionContract,
     PaperPosition,
     PositionStatus,
@@ -53,11 +54,32 @@ class PaperEngine:
         data: MarketData,
         storage: Storage,
         as_of: date | None = None,
+        cost_model: CostModel | None = None,
     ):
         self.config = config
         self.data = data
         self.storage = storage
         self.as_of = as_of or date.today()
+        # When None, fills happen at the mid with no commission (the original
+        # behaviour). A CostModel makes entries/exits fill at bid/ask + fees.
+        self.cost_model = cost_model
+
+    # --- Fill pricing ------------------------------------------------------
+
+    def _entry_price(self, contract: OptionContract) -> float:
+        if self.cost_model is None:
+            return contract.mid
+        return self.cost_model.entry_fill(contract)
+
+    def _exit_price(self, contract: OptionContract) -> float:
+        if self.cost_model is None:
+            return contract.mid
+        return self.cost_model.exit_fill(contract)
+
+    def _settle_price(self, intrinsic: float) -> float:
+        if self.cost_model is None:
+            return round(intrinsic, 2)
+        return self.cost_model.settle_fill(intrinsic)
 
     # --- Opening -----------------------------------------------------------
 
@@ -84,7 +106,7 @@ class PaperEngine:
             strike=c.strike,
             expiration=c.expiration,
             quantity=quantity,
-            entry_price=c.mid,
+            entry_price=self._entry_price(c),
             entry_date=self.as_of,
             status=PositionStatus.OPEN,
         )
@@ -126,21 +148,23 @@ class PaperEngine:
                     intrinsic = max(0.0, last - position.strike)
                 else:
                     intrinsic = max(0.0, position.strike - last)
-                intrinsic = round(intrinsic, 2)
+                settle = self._settle_price(intrinsic)
                 self.storage.close_position(
-                    position.id, intrinsic, self.as_of, "expired at intrinsic"
+                    position.id, settle, self.as_of, "expired at intrinsic"
                 )
                 return ManageResult(
-                    position, intrinsic, True, "expired at intrinsic"
+                    position, settle, True, "expired at intrinsic"
                 )
             return ManageResult(position, None, False, "no price available")
 
-        price = contract.mid
-        reason = self.exit_reason(position, price)
+        # Exit rules trigger on the current market mid; the actual fill is at
+        # the (worse) cost-adjusted exit price.
+        reason = self.exit_reason(position, contract.mid)
         if reason is not None:
-            self.storage.close_position(position.id, price, self.as_of, reason)
-            return ManageResult(position, price, True, reason)
-        return ManageResult(position, price, False, "hold")
+            fill = self._exit_price(contract)
+            self.storage.close_position(position.id, fill, self.as_of, reason)
+            return ManageResult(position, fill, True, reason)
+        return ManageResult(position, contract.mid, False, "hold")
 
     def manage_all(self) -> list[ManageResult]:
         return [self.manage_position(p) for p in self.storage.open_positions()]
@@ -152,6 +176,13 @@ class PaperEngine:
             self.data, position.underlying, position.side, position.option_symbol
         )
         return contract.mid if contract else None
+
+    def exit_fill_price(self, position: PaperPosition) -> float | None:
+        """Cost-aware price to close a position now (for forced closes)."""
+        contract = _find_contract(
+            self.data, position.underlying, position.side, position.option_symbol
+        )
+        return self._exit_price(contract) if contract else None
 
     def realized_pl_total(self) -> float:
         return round(
