@@ -34,6 +34,13 @@ class SignalConfig:
     rsi_period: int
     rsi_min: float
     rsi_max: float
+    # Intraday-signal settings (used by the 'intraday_momentum' signal). Bars
+    # are Tradier timesales at this interval; the SMA/RSI use shorter periods
+    # than the daily signal so a same-day trend is detectable early in the
+    # session rather than 100+ minutes in.
+    intraday_interval: str = "5min"
+    intraday_sma_period: int = 9
+    intraday_rsi_period: int = 9
 
 
 @dataclass(frozen=True)
@@ -323,7 +330,7 @@ def _build_exits(d: dict) -> ExitConfig:
     return cfg
 
 
-_VALID_SIGNALS = {"momentum"}
+_VALID_SIGNALS = {"momentum", "intraday_momentum"}
 
 
 
@@ -389,7 +396,16 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         rsi_period=int(signal.get("rsi_period", 14)),
         rsi_min=float(signal.get("rsi_min", 45)),
         rsi_max=float(signal.get("rsi_max", 70)),
+        intraday_interval=str(signal.get("intraday_interval", "5min")),
+        intraday_sma_period=int(signal.get("intraday_sma_period", 9)),
+        intraday_rsi_period=int(signal.get("intraday_rsi_period", 9)),
     )
+    if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
+        raise ValueError(
+            "signal.intraday_interval must be one of 1min, 5min, 15min"
+        )
+    if signal_cfg.intraday_sma_period <= 0 or signal_cfg.intraday_rsi_period <= 0:
+        raise ValueError("signal.intraday_*_period must be positive")
 
     exits_cfg = _build_exits(exits)
 

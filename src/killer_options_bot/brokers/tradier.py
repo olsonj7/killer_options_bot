@@ -81,6 +81,40 @@ class TradierMarketData:
             last = closes[-1]
         return Quote(symbol=symbol, last=last, closes=closes)
 
+    def get_intraday_closes(
+        self, symbol: str, interval: str = "5min"
+    ) -> list[float]:
+        """Intraday bar closes for today's session, oldest first.
+
+        Uses Tradier ``/markets/timesales`` from the session open to now, with
+        ``session_filter=open`` so pre/post-market prints are excluded. Returns
+        an empty list before the open or if the series is unavailable (the
+        intraday signal then simply declines to trade).
+        """
+        now = datetime.now()
+        start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        data = self._get(
+            "/markets/timesales",
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "start": start.strftime("%Y-%m-%d %H:%M"),
+                "end": now.strftime("%Y-%m-%d %H:%M"),
+                "session_filter": "open",
+            },
+        )
+        node = ((data.get("series") or {}) or {}).get("data") or []
+        if isinstance(node, dict):
+            node = [node]
+        closes: list[float] = []
+        for bar in node:
+            price = bar.get("close")
+            if price is None:
+                price = bar.get("price")
+            if price is not None:
+                closes.append(float(price))
+        return closes
+
     def _expirations(self, symbol: str) -> list[date]:
         data = self._get(
             "/markets/options/expirations",

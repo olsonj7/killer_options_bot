@@ -78,6 +78,29 @@ class MockMarketData:
         last = closes[-1]
         return Quote(symbol=symbol, last=last, closes=closes)
 
+    def get_intraday_closes(
+        self, symbol: str, interval: str = "5min"
+    ) -> list[float]:
+        """Synthetic intraday bars for the current session, oldest first.
+
+        Deterministic per symbol/date so mock-mode 0DTE runs and tests are
+        repeatable. Produces a gentle intraday drift plus a small oscillation
+        around today's price so the intraday momentum signal has something to
+        react to. Bar count scales with the interval (a full 6.5h session).
+        """
+        per_hour = {"1min": 60, "5min": 12, "15min": 4}.get(interval, 12)
+        bars = max(2, int(6.5 * per_hour))
+        seed = _seed(symbol)
+        last = self._current_price(symbol)
+        direction = ((seed % 5) - 2) / 1000.0  # per-symbol intraday drift
+        out: list[float] = []
+        for i in range(bars):
+            frac = i / (bars - 1) if bars > 1 else 1.0
+            drift = direction * last * frac
+            wobble = math.sin((seed % 17) + frac * 6.28) * (last * 0.004)
+            out.append(round(max(0.5, last + drift + wobble), 2))
+        return out
+
     # --- Options -----------------------------------------------------------
 
     def _expirations(self) -> list[date]:

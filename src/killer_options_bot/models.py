@@ -20,8 +20,11 @@ class Quote:
 
     symbol: str
     last: float
-    # Historical closes, oldest first, used for indicators.
+    # Historical daily closes, oldest first, used for daily indicators.
     closes: list[float] = field(default_factory=list)
+    # Intraday bar closes for the current session, oldest first. Populated only
+    # for strategies that use an intraday signal (e.g. 0DTE); empty otherwise.
+    intraday: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

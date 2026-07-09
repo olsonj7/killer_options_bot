@@ -70,7 +70,9 @@ strategies:
   zerodte:
     # Same-day / next-day expiries. Needs real delta to move, wider spreads
     # tolerated, fast profit-take, hard same-day exit (max_holding_days: 0).
-    signal: momentum
+    # Uses the INTRADAY momentum signal: a same-day option should be traded off
+    # same-day price action, not stale daily closes.
+    signal: intraday_momentum
     # Fast-moving, same-day expiry: hunt for entries every couple of minutes.
     scan_interval_minutes: 2
     contract_filters:
@@ -181,6 +183,12 @@ signal:
   rsi_period: 14
   rsi_min: 45
   rsi_max: 70
+  # Intraday-signal settings, used by the 'intraday_momentum' signal (0DTE).
+  # Bars come from Tradier timesales at this interval; shorter SMA/RSI periods
+  # let a same-day trend register early (9-period on 5min bars ~= 45 min in).
+  intraday_interval: 5min   # one of: 1min, 5min, 15min
+  intraday_sma_period: 9
+  intraday_rsi_period: 9
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.

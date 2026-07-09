@@ -51,6 +51,43 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     )
 
 
+def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
+    """Momentum on intraday bars, for same-day (0DTE) trades.
+
+    Identical in spirit to ``momentum_signal`` but evaluated on the current
+    session's intraday bars (``quote.intraday``) with shorter SMA/RSI periods,
+    so a same-day directional move is detectable within the session rather than
+    off stale daily closes. Returns no trade when there is not yet enough
+    intraday history (e.g. right after the open).
+    """
+    s = cfg.signal
+    bars = quote.intraday
+    ma = sma(bars, s.intraday_sma_period)
+    r = rsi(bars, s.intraday_rsi_period)
+    if ma is None or r is None:
+        return Signal(
+            None, f"Insufficient intraday history ({len(bars)} bars)"
+        )
+    price = bars[-1]
+    if price > ma and s.rsi_min <= r <= s.rsi_max:
+        return Signal(
+            Side.CALL,
+            f"Intraday bullish: {price:.2f} > SMA{s.intraday_sma_period} "
+            f"{ma:.2f}, RSI {r:.1f} in [{s.rsi_min:.0f},{s.rsi_max:.0f}]",
+        )
+    if price < ma and r < s.rsi_min:
+        return Signal(
+            Side.PUT,
+            f"Intraday bearish: {price:.2f} < SMA{s.intraday_sma_period} "
+            f"{ma:.2f}, RSI {r:.1f} < {s.rsi_min:.0f}",
+        )
+    return Signal(
+        None,
+        f"No intraday edge: {price:.2f} vs SMA{s.intraday_sma_period} "
+        f"{ma:.2f}, RSI {r:.1f}",
+    )
+
+
 def _best_contract(
     contracts: list[OptionContract], cfg: Config, as_of: date
 ) -> OptionContract | None:
@@ -71,7 +108,13 @@ def _best_contract(
 
 #: Entry-signal dispatch by ``StrategyConfig.signal`` name. New signal types
 #: (e.g. an intraday/breakout signal for 0DTE) can be registered here.
-_SIGNALS = {"momentum": momentum_signal}
+_SIGNALS = {
+    "momentum": momentum_signal,
+    "intraday_momentum": intraday_momentum_signal,
+}
+
+#: Signals that need the current session's intraday bars attached to the quote.
+_INTRADAY_SIGNALS = {"intraday_momentum"}
 
 
 def _signal_for(strategy: StrategyConfig, quote: Quote, cfg: Config) -> Signal:
@@ -104,6 +147,15 @@ class Scanner:
         scfg = replace(self.config, filters=strategy.filters, exits=strategy.exits)
 
         quote = self.data.get_quote(symbol)
+        # Intraday strategies (0DTE) need the current session's bars, which the
+        # daily quote does not carry. Fetch them on demand when the data source
+        # supports it; fall back to an empty list (signal then declines).
+        if strategy.signal in _INTRADAY_SIGNALS:
+            getter = getattr(self.data, "get_intraday_closes", None)
+            bars: list[float] = []
+            if getter is not None:
+                bars = getter(symbol, scfg.signal.intraday_interval)
+            quote = replace(quote, intraday=bars)
         signal = _signal_for(strategy, quote, scfg)
         if signal.side is None:
             return None

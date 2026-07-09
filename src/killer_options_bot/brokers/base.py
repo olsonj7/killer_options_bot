@@ -26,6 +26,16 @@ class MarketData(Protocol):
         """Return available option contracts for a symbol and side."""
         ...
 
+    def get_intraday_closes(
+        self, symbol: str, interval: str = "5min"
+    ) -> list[float]:
+        """Return the current session's intraday bar closes, oldest first.
+
+        Optional: sources that cannot supply intraday bars may omit this (the
+        scanner guards with ``getattr`` and intraday signals then decline).
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class OrderResult:
