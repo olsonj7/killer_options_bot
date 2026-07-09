@@ -91,6 +91,9 @@ python -m killer_options_bot pnl       --as-of 2026-03-25
 To use real Tradier sandbox data, put your token in `.env` and run:
 
 ```bash
+# Verify the token first (read-only: fetches a quote + an option chain):
+python -m killer_options_bot check-tradier          # or: --symbol QQQ
+
 python -m killer_options_bot scan --source tradier
 ```
 

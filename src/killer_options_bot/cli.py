@@ -714,6 +714,90 @@ def run_loop(
 
 
 
+def cmd_check_tradier(args: argparse.Namespace) -> int:
+    """Verify Tradier connectivity: fetch a quote and an option chain.
+
+    A fast smoke test for a freshly issued token. It only reads market data
+    (never places an order) and prints what it saw so you can confirm the
+    token, base URL, and greeks are all coming through.
+    """
+    config = load_config(args.config)
+    token = config.tradier.api_token
+    base_url = config.tradier.base_url
+    symbol = args.symbol.upper()
+
+    if not token:
+        print(
+            "Error: no Tradier token found. Set TRADIER_API_TOKEN in your .env "
+            "(and optionally TRADIER_BASE_URL).",
+            file=sys.stderr,
+        )
+        return 1
+
+    from killer_options_bot.brokers.tradier import TradierError, TradierMarketData
+    from killer_options_bot.models import Side
+
+    is_sandbox = "sandbox" in base_url
+    print(
+        f"Checking Tradier: {base_url} "
+        f"({'sandbox' if is_sandbox else 'PRODUCTION'})"
+    )
+    print(f"Token: ...{token[-4:]} (len {len(token)})\n")
+
+    data = TradierMarketData(api_token=token, base_url=base_url)
+
+    try:
+        quote = data.get_quote(symbol)
+    except TradierError as exc:
+        print(f"Quote request failed: {exc}", file=sys.stderr)
+        print(
+            "\nCommon causes: wrong/expired token, wrong base URL (sandbox vs "
+            "production), or the token has no market-data entitlement yet.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        f"Quote OK: {symbol} last ${quote.last:.2f} "
+        f"({len(quote.closes)} daily closes for indicators)"
+    )
+
+    try:
+        chain = data.get_option_chain(symbol, Side.CALL)
+    except TradierError as exc:
+        print(f"Option chain request failed: {exc}", file=sys.stderr)
+        return 1
+
+    if not chain:
+        print(
+            f"Option chain returned no CALL contracts for {symbol}. "
+            "Try a highly liquid symbol like SPY.",
+            file=sys.stderr,
+        )
+        return 1
+
+    with_greeks = [c for c in chain if c.delta != 0.0]
+    near = min(chain, key=lambda c: abs(c.strike - quote.last))
+    print(
+        f"Chain OK: {len(chain)} CALL contracts, "
+        f"{len(with_greeks)} with greeks."
+    )
+    print(
+        f"  nearest ATM: {near.symbol} strike {near.strike:g} "
+        f"exp {near.expiration} ({near.dte()}DTE) "
+        f"bid ${near.bid:.2f} ask ${near.ask:.2f} "
+        f"delta {near.delta:+.2f} IV {near.implied_volatility:.0%}"
+    )
+    if not with_greeks:
+        print(
+            "\nNote: greeks came back empty. Sandbox greeks can lag; the "
+            "scanner's delta filter needs them, so re-check during market "
+            "hours if this persists."
+        )
+    print("\nTradier connectivity looks good. You can run with --source tradier.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="killer-options-bot",
@@ -916,6 +1000,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a single cycle then exit (useful for cron/testing)",
     )
     p_run.set_defaults(func=cmd_run)
+
+    p_check = sub.add_parser(
+        "check-tradier",
+        help="Verify Tradier connectivity (quote + option chain; read-only)",
+    )
+    p_check.add_argument(
+        "--symbol",
+        default="SPY",
+        help="Symbol to test with (default: SPY)",
+    )
+    p_check.set_defaults(func=cmd_check_tradier)
 
     return parser
 

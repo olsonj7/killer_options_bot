@@ -93,7 +93,10 @@ def test_run_once_no_paper_opens_nothing(tmp_path, capsys):
     assert "opened #" not in out
 
 
-def test_run_rejects_tradier_without_token(tmp_path, capsys):
+def test_run_rejects_tradier_without_token(tmp_path, capsys, monkeypatch):
+    # Force an empty token so load_dotenv(override=False) won't repopulate it
+    # from a real local .env (hermetic regardless of the developer's machine).
+    monkeypatch.setenv("TRADIER_API_TOKEN", "")
     config_path = _write_run_config(tmp_path)
     rc = main(
         [
