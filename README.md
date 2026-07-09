@@ -209,6 +209,30 @@ src/killer_options_bot/
 - Exit once DTE falls to 21 or below (avoid the final expiration zone)
 
 
+## Position sizing & scale-out (see config.yaml `sizing` / `exits.trims`)
+
+By default every signal buys a **single contract** and exits all-or-nothing.
+Two opt-in features enable a small-account 0DTE "scale-out" playbook:
+
+- **Position sizing** (`sizing` block). When `enabled: true`, the engine spends
+  the per-trade risk budget (`sizing.risk_per_trade_pct`, or
+  `risk.max_trade_risk_pct` if unset) on as many contracts as fit, capped by
+  `max_contracts` and floored at 1. Buying ≥ 2 contracts is what makes trimming
+  possible.
+- **Partial exits / trims** (`exits.trims`). A ladder of `{at_pct, fraction}`
+  rules that sells a fraction of the **original** contract count as profit
+  thresholds are hit — banking realized profit into strength while leaving a
+  runner for the terminal exit. Fractions are of the original size and must sum
+  to `< 1` (a runner is always left). Rules fire in ascending `at_pct` order; a
+  single-contract position is never trimmed. A trim that would empty the
+  position becomes a full close.
+
+The bundled `zerodte` strategy uses this: size up to 10 contracts, sell half at
++25%, another quarter at +50%, and let the rest ride to a +80% target (or the
+same-day forced exit). R-multiples on the dashboard use the **original** debit
+as the risk basis, so a scaled-out winner still reports correct R.
+
+
 ## Risk rules (defaults, see config.yaml)
 
 - Max 3-5% of account risked per trade

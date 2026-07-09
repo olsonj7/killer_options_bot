@@ -77,10 +77,20 @@ strategies:
       max_delta: 0.55
       max_spread_pct: 0.18
     exits:
-      profit_target_pct: 0.40
+      profit_target_pct: 0.80
       stop_loss_pct: 0.30
       max_holding_days: 0
       min_dte_exit: 0
+      # Scale-out ladder: bank profit into strength, let a runner ride to the
+      # 0.80 target (or the same-day forced exit). Fractions are of the
+      # ORIGINAL contract count and must sum to < 1 (a runner is always left).
+      # Requires position sizing to open >= 2 contracts (see the "sizing"
+      # block); a single-contract position cannot be trimmed.
+      trims:
+        - at_pct: 0.25   # +25%: sell half
+          fraction: 0.5
+        - at_pct: 0.50   # +50%: sell another quarter
+          fraction: 0.25
   swing:
     # Multi-day directional trades. Longer expiries give the move room to
     # develop, so a wider stop and a multi-day hold, exiting before theta bites.
@@ -185,6 +195,19 @@ costs:
   # Fraction of the half-spread you cross: 1.0 = pay full ask / receive full bid
   # (conservative, realistic for illiquid weeklies); 0.0 = fill at mid.
   slippage_frac: 1.0
+
+sizing:
+  # Position sizing: how many contracts to buy per signal. When disabled every
+  # trade is a single contract (legacy behaviour). When enabled the engine
+  # spends the per-trade risk budget on as many contracts as fit, capped by
+  # max_contracts and floored at 1. Buying >= 2 contracts is what makes the
+  # 0DTE scale-out (trims) possible.
+  enabled: true
+  # Never buy more than this many contracts on one signal.
+  max_contracts: 10
+  # Fraction of the account to spend per trade. If unset, falls back to
+  # risk.max_trade_risk_pct.
+  # risk_per_trade_pct: 0.30
 
 storage:
   db_path: data/killer_options_bot.db

@@ -43,11 +43,44 @@ class TradierConfig:
 
 
 @dataclass(frozen=True)
+class TrimRule:
+    """One scale-out level: sell part of a position when profit reaches a level.
+
+    ``at_pct`` is the profit threshold as a fraction of the entry price (0.25 =
+    +25%). ``fraction`` is the portion of the *original* position size to sell
+    at that level (0.5 = half). Trims fire in ascending ``at_pct`` order.
+    """
+
+    at_pct: float
+    fraction: float
+
+
+@dataclass(frozen=True)
 class ExitConfig:
     profit_target_pct: float
     stop_loss_pct: float
     max_holding_days: int
     min_dte_exit: int
+    #: Optional scale-out ladder. Empty means all-or-nothing exits. Contracts
+    #: are trimmed on strength before the terminal target/stop closes the rest.
+    trims: tuple["TrimRule", ...] = ()
+
+
+@dataclass(frozen=True)
+class SizingConfig:
+    """Position sizing: how many contracts to buy per signal.
+
+    When disabled the engine buys a single contract (the original behaviour).
+    When enabled it spends a risk budget (``risk_per_trade_pct`` of the account,
+    falling back to ``risk.max_trade_risk_pct``) on as many contracts as fit,
+    capped by ``max_contracts`` and floored at 1. Buying multiples is what makes
+    scale-out (trim) strategies possible.
+    """
+
+    enabled: bool = False
+    max_contracts: int = 1
+    risk_per_trade_pct: float | None = None
+
 
 
 @dataclass(frozen=True)
@@ -135,6 +168,7 @@ class Config:
     tradier: TradierConfig
     strategies: tuple["StrategyConfig", ...] = ()
     costs: "CostConfig" = field(default_factory=CostConfig)
+    sizing: "SizingConfig" = field(default_factory=SizingConfig)
     withdraw: "WithdrawConfig" = field(
         default_factory=lambda: WithdrawConfig(
             enabled=False,
@@ -178,6 +212,26 @@ class Config:
             commission_per_contract=self.costs.commission_per_contract,
             slippage_frac=self.costs.slippage_frac,
         )
+
+    def contracts_for(self, cost_per_contract: float) -> int:
+        """How many contracts to buy for a signal given a per-contract debit.
+
+        Returns 1 when sizing is disabled (legacy behaviour). When enabled,
+        spends the risk budget on as many contracts as fit, capped by
+        ``max_contracts`` and floored at 1 so a signal always takes at least a
+        single contract.
+        """
+        if not self.sizing.enabled:
+            return 1
+        if cost_per_contract <= 0:
+            return 1
+        pct = self.sizing.risk_per_trade_pct
+        if pct is None:
+            pct = self.risk.max_trade_risk_pct
+        budget = self.account_value * pct
+        n = int(budget // cost_per_contract)
+        n = min(n, self.sizing.max_contracts)
+        return max(1, n)
 
 
 def _require(mapping: dict, key: str, section: str):
@@ -229,12 +283,38 @@ def _build_filters(d: dict) -> ContractFilters:
     return cfg
 
 
+def _build_trims(raw_trims) -> tuple[TrimRule, ...]:
+    """Parse and validate the scale-out ladder for an exits block."""
+    if not raw_trims:
+        return ()
+    rules: list[TrimRule] = []
+    for i, t in enumerate(raw_trims):
+        at_pct = float(t.get("at_pct", 0.0))
+        fraction = float(t.get("fraction", 0.0))
+        if at_pct <= 0:
+            raise ValueError("exits.trims[].at_pct must be positive")
+        if not 0 < fraction < 1:
+            raise ValueError(
+                "exits.trims[].fraction must be between 0 and 1 (exclusive)"
+            )
+        rules.append(TrimRule(at_pct=at_pct, fraction=fraction))
+    rules.sort(key=lambda r: r.at_pct)
+    total = sum(r.fraction for r in rules)
+    if total >= 1.0:
+        raise ValueError(
+            "exits.trims fractions must sum to less than 1 "
+            "(leave a runner for the terminal exit)"
+        )
+    return tuple(rules)
+
+
 def _build_exits(d: dict) -> ExitConfig:
     cfg = ExitConfig(
         profit_target_pct=float(d.get("profit_target_pct", 0.35)),
         stop_loss_pct=float(d.get("stop_loss_pct", 0.45)),
         max_holding_days=int(d.get("max_holding_days", 21)),
         min_dte_exit=int(d.get("min_dte_exit", 21)),
+        trims=_build_trims(d.get("trims", [])),
     )
     if cfg.profit_target_pct <= 0:
         raise ValueError("exits.profit_target_pct must be positive")
@@ -410,6 +490,23 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     if not 0 <= costs_cfg.slippage_frac <= 1:
         raise ValueError("costs.slippage_frac must be between 0 and 1")
 
+    sizing_raw = raw.get("sizing", {}) or {}
+    sizing_risk = sizing_raw.get("risk_per_trade_pct")
+    sizing_cfg = SizingConfig(
+        enabled=bool(sizing_raw.get("enabled", False)),
+        max_contracts=int(sizing_raw.get("max_contracts", 1)),
+        risk_per_trade_pct=(
+            float(sizing_risk) if sizing_risk is not None else None
+        ),
+    )
+    if sizing_cfg.max_contracts < 1:
+        raise ValueError("sizing.max_contracts must be >= 1")
+    if (
+        sizing_cfg.risk_per_trade_pct is not None
+        and not 0 < sizing_cfg.risk_per_trade_pct <= 1
+    ):
+        raise ValueError("sizing.risk_per_trade_pct must be between 0 and 1")
+
     wd = raw.get("withdraw", {}) or {}
     starting_capital = float(wd.get("starting_capital", 0.0)) or account_value
     milestones_raw = wd.get("milestones", []) or []
@@ -459,5 +556,6 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         tradier=tradier,
         strategies=tuple(active_strategies),
         costs=costs_cfg,
+        sizing=sizing_cfg,
         withdraw=withdraw_cfg,
     )

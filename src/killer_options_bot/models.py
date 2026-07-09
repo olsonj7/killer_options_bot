@@ -152,7 +152,14 @@ class PaperPosition:
     """A simulated long-option position opened in paper mode.
 
     All prices are per-share option prices; multiply by 100 * quantity for
-    dollars. ``quantity`` is the number of contracts.
+    dollars. ``quantity`` is the number of contracts *currently held*.
+
+    Positions can be *scaled out* (trimmed): partial exits sell a portion of the
+    contracts and bank that profit. When that happens ``quantity`` shrinks to
+    the remaining contracts, ``original_quantity`` keeps the size the position
+    was opened at, ``realized_pl_banked`` accumulates the dollars locked in by
+    trims, and ``trims_done`` counts how many trim levels have fired. The
+    terminal exit then closes whatever remains.
     """
 
     option_symbol: str
@@ -168,26 +175,45 @@ class PaperPosition:
     exit_date: date | None = None
     exit_reason: str | None = None
     strategy: str = "default"
+    original_quantity: int | None = None
+    realized_pl_banked: float = 0.0
+    trims_done: int = 0
     id: int | None = None
+
+    def __post_init__(self) -> None:
+        # A freshly opened position has not been trimmed, so its original size
+        # equals its current size unless a stored value is supplied.
+        if self.original_quantity is None:
+            self.original_quantity = self.quantity
 
     @property
     def entry_cost(self) -> float:
-        """Total debit paid in dollars."""
+        """Total debit currently at risk in dollars (remaining contracts)."""
         return round(self.entry_price * 100 * self.quantity, 2)
 
+    @property
+    def initial_cost(self) -> float:
+        """Debit paid at entry for the full original size (the risk basis).
+
+        R-multiples are measured against this: a full stop-out of the whole
+        original position is -1R, regardless of any trims taken along the way.
+        """
+        qty = self.original_quantity or self.quantity
+        return round(self.entry_price * 100 * qty, 2)
+
     def value_at(self, option_price: float) -> float:
-        """Mark-to-market dollar value at a given per-share option price."""
+        """Mark-to-market dollar value of the *remaining* contracts."""
         return round(option_price * 100 * self.quantity, 2)
 
     def unrealized_pl(self, option_price: float) -> float:
         return round(self.value_at(option_price) - self.entry_cost, 2)
 
     def realized_pl(self) -> float | None:
+        """Total realized P/L once closed: banked trims + the final leg."""
         if self.exit_price is None:
             return None
-        return round(
-            self.value_at(self.exit_price) - self.entry_cost, 2
-        )
+        final_leg = (self.exit_price - self.entry_price) * 100 * self.quantity
+        return round(self.realized_pl_banked + final_leg, 2)
 
     def pl_pct(self, option_price: float) -> float:
         """Return as a fraction of the entry debit."""

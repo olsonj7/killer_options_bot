@@ -341,14 +341,17 @@ _WD_LABELS = {
 def _r_multiple(position: PaperPosition) -> float | None:
     """Result expressed in R (multiple of risk).
 
-    Risk on a long option is the debit paid (the max loss), so R is simply the
-    realized P/L divided by the entry cost. Mirrors the "Percent Result" column
-    of the trade-tracker template, where a full stop-out is -1R.
+    Risk on a long option is the debit paid (the max loss), so R is the
+    realized P/L divided by the *initial* cost (the original number of
+    contracts). Using initial cost keeps R correct after partial exits, where
+    the remaining ``entry_cost`` no longer reflects the size originally risked.
+    Mirrors the "Percent Result" column of the trade-tracker template, where a
+    full stop-out is -1R.
     """
     pl = position.realized_pl()
-    if pl is None or position.entry_cost <= 0:
+    if pl is None or position.initial_cost <= 0:
         return None
-    return pl / position.entry_cost
+    return pl / position.initial_cost
 
 
 def _trade_stats(closed: list[PaperPosition]) -> list[dict]:
@@ -448,11 +451,14 @@ def _render_page(
     pos_rows = []
     for p in open_positions:
         price = engine.mark_to_market(p)
+        orig = p.original_quantity or p.quantity
+        qty_txt = f"{p.quantity}/{orig}" if orig != p.quantity else str(p.quantity)
         if price is None:
             pos_rows.append(
                 f"<tr><td>{html.escape(p.option_symbol)}</td>"
                 f"<td>{html.escape(p.underlying)}</td>"
                 f"<td>{html.escape(p.side.value.upper())}</td>"
+                f"<td>{qty_txt}</td>"
                 f"<td>{_fmt_money(p.entry_price)}</td>"
                 f"<td>-</td><td>-</td>"
                 f"<td>{p.holding_days(engine.as_of)}</td>"
@@ -462,13 +468,17 @@ def _render_page(
         upl = p.unrealized_pl(price)
         unrealized += upl
         cls = "pos" if upl >= 0 else "neg"
+        pl_txt = f"{_fmt_money(upl)} ({p.pl_pct(price):+.0%})"
+        if p.realized_pl_banked:
+            pl_txt += f" +${p.realized_pl_banked:,.0f} banked"
         pos_rows.append(
             f"<tr><td>{html.escape(p.option_symbol)}</td>"
             f"<td>{html.escape(p.underlying)}</td>"
             f"<td>{html.escape(p.side.value.upper())}</td>"
+            f"<td>{qty_txt}</td>"
             f"<td>{_fmt_money(p.entry_price)}</td>"
             f"<td>{_fmt_money(price)}</td>"
-            f"<td class='{cls}'>{_fmt_money(upl)} ({p.pl_pct(price):+.0%})</td>"
+            f"<td class='{cls}'>{pl_txt}</td>"
             f"<td>{p.holding_days(engine.as_of)}</td>"
             f"<td>{p.dte(engine.as_of)}</td></tr>"
         )
@@ -610,7 +620,7 @@ def _render_page(
 
   <h2 style="font-size:15px;">Open positions</h2>
   <table>
-    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Entry</th>
+    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Qty</th><th>Entry</th>
         <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>DTE</th></tr>
     {pos_body}
   </table>

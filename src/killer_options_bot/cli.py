@@ -142,18 +142,28 @@ def cmd_manage(args: argparse.Namespace) -> int:
         price_txt = f"${r.price:.2f}" if r.price is not None else "n/a"
         if r.closed:
             closed += 1
-            pl = p.value_at(r.price or 0.0) - p.entry_cost
+            # Total realized P/L including anything banked from earlier trims.
+            pl = p.realized_pl()
+            pl_txt = f"${pl:+.2f}" if pl is not None else "n/a"
             print(
                 f"CLOSED #{p.id} {p.option_symbol} @ {price_txt} "
-                f"({r.reason}) P/L ${pl:+.2f}"
+                f"({r.reason}) P/L {pl_txt}"
             )
         else:
             pl = p.unrealized_pl(r.price) if r.price is not None else 0.0
+            qty_txt = (
+                f"{p.quantity}/{p.original_quantity} left "
+                if (p.original_quantity or p.quantity) != p.quantity
+                else f"x{p.quantity} "
+            )
+            trim_txt = ""
+            if r.trimmed:
+                trim_txt = f" [trimmed {r.trimmed}, banked ${r.banked:+.2f}]"
             print(
-                f"HOLD   #{p.id} {p.option_symbol} @ {price_txt} "
+                f"HOLD   #{p.id} {p.option_symbol} {qty_txt}@ {price_txt} "
                 f"unreal ${pl:+.2f} "
                 f"({p.holding_days(engine.as_of)}d held, "
-                f"{p.dte(engine.as_of)}DTE)"
+                f"{p.dte(engine.as_of)}DTE){trim_txt}"
             )
     print(f"\nManaged {len(results)} position(s). Closed {closed}.")
     return 0
@@ -174,18 +184,29 @@ def cmd_positions(args: argparse.Namespace) -> int:
         return 0
     for p in positions:
         price = engine.mark_to_market(p)
+        qty_txt = (
+            f"{p.quantity}/{p.original_quantity}"
+            if (p.original_quantity or p.quantity) != p.quantity
+            else f"x{p.quantity}"
+        )
+        banked_txt = (
+            f" banked ${p.realized_pl_banked:+.2f}"
+            if p.realized_pl_banked
+            else ""
+        )
         if price is None:
             print(
-                f"#{p.id} {p.option_symbol} entry ${p.entry_price:.2f} "
-                f"(debit ${p.entry_cost:.2f}) - no market price"
+                f"#{p.id} {p.option_symbol} {qty_txt} entry ${p.entry_price:.2f} "
+                f"(debit ${p.entry_cost:.2f}) - no market price{banked_txt}"
             )
             continue
         print(
             f"#{p.id} {p.underlying} {p.side.value.upper()} {p.strike:g} "
-            f"entry ${p.entry_price:.2f} mark ${price:.2f} "
+            f"{qty_txt} entry ${p.entry_price:.2f} mark ${price:.2f} "
             f"unreal ${p.unrealized_pl(price):+.2f} "
             f"({p.pl_pct(price):+.0%}) "
             f"{p.holding_days(engine.as_of)}d held {p.dte(engine.as_of)}DTE"
+            f"{banked_txt}"
         )
     return 0
 
@@ -673,8 +694,13 @@ def run_loop(
         # 1) Always manage exits first (capital protection).
         results = engine.manage_all()
         closed = sum(1 for r in results if r.closed)
+        trimmed = sum(1 for r in results if r.trimmed and not r.closed)
         if results:
-            log(f"[{stamp}] managed {len(results)} position(s), closed {closed}")
+            extra = f", trimmed {trimmed}" if trimmed else ""
+            log(
+                f"[{stamp}] managed {len(results)} position(s), "
+                f"closed {closed}{extra}"
+            )
 
         # 2) Scan each strategy that is due for new entries.
         opened = 0

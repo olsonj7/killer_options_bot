@@ -36,6 +36,8 @@ class ManageResult:
     price: float | None
     closed: bool
     reason: str
+    trimmed: int = 0
+    banked: float = 0.0
 
 
 def _find_contract(
@@ -96,12 +98,14 @@ class PaperEngine:
     # --- Opening -----------------------------------------------------------
 
     def open_from_candidate(
-        self, candidate: Candidate, quantity: int = 1
+        self, candidate: Candidate, quantity: int | None = None
     ) -> PaperPosition | None:
         """Open a paper position from an allowed candidate.
 
-        Returns None if guardrails block the open (max open positions,
-        duplicate symbol, or the candidate was not allowed by risk).
+        When ``quantity`` is None the size is chosen by the config's position
+        sizing (a single contract unless sizing is enabled). Returns None if
+        guardrails block the open (max open positions, duplicate symbol, or the
+        candidate was not allowed by risk).
         """
         if not candidate.decision.allowed:
             return None
@@ -111,6 +115,9 @@ class PaperEngine:
             return None
 
         c = candidate.contract
+        entry_price = self._entry_price(c)
+        if quantity is None:
+            quantity = self.config.contracts_for(entry_price * 100)
         position = PaperPosition(
             option_symbol=c.symbol,
             underlying=c.underlying,
@@ -118,10 +125,11 @@ class PaperEngine:
             strike=c.strike,
             expiration=c.expiration,
             quantity=quantity,
-            entry_price=self._entry_price(c),
+            entry_price=entry_price,
             entry_date=self.as_of,
             status=PositionStatus.OPEN,
             strategy=candidate.strategy,
+            original_quantity=quantity,
         )
         self.storage.open_position(position)
         return position
@@ -147,6 +155,64 @@ class PaperEngine:
 
     # --- Managing open positions ------------------------------------------
 
+    def _maybe_trim(
+        self, position: PaperPosition, contract
+    ) -> tuple[int, float]:
+        """Scale out of a winning position per the strategy's trim ladder.
+
+        Sells fractions of the *original* size as profit thresholds are hit,
+        banking the realized P/L while leaving a runner. Returns
+        ``(contracts_trimmed, dollars_banked)`` for this tick. If a trim would
+        take the entire remaining position it becomes a full close (the final
+        leg) and ``position.status`` is set to CLOSED.
+        """
+        e = self._exits_for(position)
+        if not e.trims:
+            return 0, 0.0
+        orig = position.original_quantity or position.quantity
+        if orig < 2:
+            # Cannot scale out of a single contract.
+            return 0, 0.0
+
+        pl_pct = position.pl_pct(contract.mid)
+        trimmed_total = 0
+        banked_total = 0.0
+        while position.trims_done < len(e.trims):
+            rule = e.trims[position.trims_done]
+            if pl_pct < rule.at_pct:
+                break
+            contracts = max(1, int(orig * rule.fraction))
+            fill = self._exit_price(contract)
+            if contracts >= position.quantity:
+                # Trim would empty the position: close the remainder outright.
+                reason = (
+                    f"trim {position.trims_done + 1} closed runner "
+                    f"({pl_pct:+.0%})"
+                )
+                remainder = position.quantity
+                self.storage.close_position(
+                    position.id, fill, self.as_of, reason
+                )
+                position.status = PositionStatus.CLOSED
+                position.exit_price = fill
+                position.exit_date = self.as_of
+                position.exit_reason = reason
+                return trimmed_total + remainder, banked_total
+            # Partial trim: bank the P/L on the sold contracts, keep the rest.
+            banked_add = (fill - position.entry_price) * 100 * contracts
+            new_qty = position.quantity - contracts
+            new_banked = round(position.realized_pl_banked + banked_add, 2)
+            new_trims_done = position.trims_done + 1
+            self.storage.reduce_position(
+                position.id, new_qty, new_banked, new_trims_done
+            )
+            position.quantity = new_qty
+            position.realized_pl_banked = new_banked
+            position.trims_done = new_trims_done
+            trimmed_total += contracts
+            banked_total += banked_add
+        return trimmed_total, round(banked_total, 2)
+
     def manage_position(self, position: PaperPosition) -> ManageResult:
         contract = _find_contract(
             self.data, position.underlying, position.side, position.option_symbol
@@ -170,14 +236,33 @@ class PaperEngine:
                 )
             return ManageResult(position, None, False, "no price available")
 
+        # Scale out on strength first: bank partial profit before checking the
+        # terminal exit on whatever runner remains.
+        trimmed, banked = self._maybe_trim(position, contract)
+        if position.status is PositionStatus.CLOSED:
+            return ManageResult(
+                position,
+                position.exit_price,
+                True,
+                position.exit_reason or "trim closed runner",
+                trimmed=trimmed,
+                banked=banked,
+            )
+
         # Exit rules trigger on the current market mid; the actual fill is at
         # the (worse) cost-adjusted exit price.
         reason = self.exit_reason(position, contract.mid)
         if reason is not None:
             fill = self._exit_price(contract)
             self.storage.close_position(position.id, fill, self.as_of, reason)
-            return ManageResult(position, fill, True, reason)
-        return ManageResult(position, contract.mid, False, "hold")
+            return ManageResult(
+                position, fill, True, reason, trimmed=trimmed, banked=banked
+            )
+        hold_reason = "hold" if trimmed == 0 else f"trimmed {trimmed}"
+        return ManageResult(
+            position, contract.mid, False, hold_reason,
+            trimmed=trimmed, banked=banked,
+        )
 
     def manage_all(self) -> list[ManageResult]:
         return [self.manage_position(p) for p in self.storage.open_positions()]
@@ -198,7 +283,12 @@ class PaperEngine:
         return self._exit_price(contract) if contract else None
 
     def realized_pl_total(self) -> float:
-        return round(
-            sum(p.realized_pl() or 0.0 for p in self.storage.closed_positions()),
-            2,
+        closed = sum(
+            p.realized_pl() or 0.0 for p in self.storage.closed_positions()
         )
+        # Profit already banked from partial exits on still-open runners counts
+        # as realized too.
+        banked_open = sum(
+            p.realized_pl_banked for p in self.storage.open_positions()
+        )
+        return round(closed + banked_open, 2)

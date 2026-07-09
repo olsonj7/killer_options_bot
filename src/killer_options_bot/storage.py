@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS positions (
     status TEXT NOT NULL,
     mode TEXT NOT NULL DEFAULT 'paper',
     strategy TEXT NOT NULL DEFAULT 'default',
+    original_quantity INTEGER,
+    realized_pl_banked {d.real} NOT NULL DEFAULT 0,
+    trims_done INTEGER NOT NULL DEFAULT 0,
     broker_order_id TEXT,
     exit_price {d.real},
     exit_date TEXT,
@@ -158,6 +161,24 @@ class BaseStorage:
                 conn.execute(
                     "ALTER TABLE positions ADD COLUMN strategy TEXT "
                     "NOT NULL DEFAULT 'default'"
+                )
+        # Scale-out (partial exit) columns, added after strategy support.
+        if cols and "original_quantity" not in cols:
+            with self._connect() as conn:
+                conn.execute(
+                    "ALTER TABLE positions ADD COLUMN original_quantity INTEGER"
+                )
+        if cols and "realized_pl_banked" not in cols:
+            with self._connect() as conn:
+                conn.execute(
+                    f"ALTER TABLE positions ADD COLUMN realized_pl_banked "
+                    f"{self.dialect.real} NOT NULL DEFAULT 0"
+                )
+        if cols and "trims_done" not in cols:
+            with self._connect() as conn:
+                conn.execute(
+                    "ALTER TABLE positions ADD COLUMN trims_done INTEGER "
+                    "NOT NULL DEFAULT 0"
                 )
 
     # --- Candidates --------------------------------------------------------
@@ -255,6 +276,13 @@ class BaseStorage:
             ),
             exit_reason=row.get("exit_reason"),
             strategy=row.get("strategy") or "default",
+            original_quantity=(
+                int(row["original_quantity"])
+                if row.get("original_quantity") is not None
+                else int(row["quantity"])
+            ),
+            realized_pl_banked=float(row.get("realized_pl_banked") or 0.0),
+            trims_done=int(row.get("trims_done") or 0),
         )
 
     def open_position(
@@ -268,8 +296,9 @@ class BaseStorage:
             INSERT INTO positions (
                 option_symbol, underlying, side, strike, expiration,
                 quantity, entry_price, entry_date, status, mode,
-                broker_order_id, exit_price, exit_date, exit_reason, strategy
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                broker_order_id, exit_price, exit_date, exit_reason, strategy,
+                original_quantity, realized_pl_banked, trims_done
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 position.option_symbol,
@@ -287,9 +316,31 @@ class BaseStorage:
                 position.exit_date.isoformat() if position.exit_date else None,
                 position.exit_reason,
                 position.strategy,
+                position.original_quantity or position.quantity,
+                position.realized_pl_banked,
+                position.trims_done,
             ),
         )
         return position.id
+
+    def reduce_position(
+        self,
+        position_id: int,
+        new_quantity: int,
+        realized_pl_banked: float,
+        trims_done: int,
+    ) -> None:
+        """Apply a partial exit (trim): shrink the held quantity and record the
+        cumulative banked P/L and the number of trim levels that have fired.
+        The position stays open; the terminal exit closes the remainder."""
+        self._execute(
+            """
+            UPDATE positions
+            SET quantity = ?, realized_pl_banked = ?, trims_done = ?
+            WHERE id = ?
+            """,
+            (new_quantity, realized_pl_banked, trims_done, position_id),
+        )
 
     def close_position(
         self,
@@ -351,9 +402,11 @@ class BaseStorage:
 
     def realized_pl_since(self, since: date, mode: str = "live") -> float:
         """Sum realized P/L (dollars) for closed positions of ``mode`` whose
-        exit_date is on/after ``since``. Used by live loss-lockout guards."""
+        exit_date is on/after ``since``. Used by live loss-lockout guards.
+        Includes any P/L banked from partial exits (trims)."""
         rows = self._query_all(
-            "SELECT entry_price, exit_price, quantity FROM positions "
+            "SELECT entry_price, exit_price, quantity, realized_pl_banked "
+            "FROM positions "
             "WHERE status = ? AND mode = ? AND exit_date >= ? "
             "AND exit_price IS NOT NULL",
             (PositionStatus.CLOSED.value, mode, since.isoformat()),
@@ -364,7 +417,7 @@ class BaseStorage:
                 (float(r["exit_price"]) - float(r["entry_price"]))
                 * 100
                 * int(r["quantity"])
-            )
+            ) + float(r.get("realized_pl_banked") or 0.0)
         return round(total, 2)
 
 
