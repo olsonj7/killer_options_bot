@@ -19,8 +19,11 @@ account_tiers:
     # Small account stays on the two most liquid ETFs only. Tight spreads and
     # deep options chains matter far more than variety when capital is tiny.
     watchlist: [SPY, QQQ]
-    # Only the base weekly momentum trade. No 0DTE gambling on a tiny account.
-    strategies: [default]
+    # Base weekly momentum trade PLUS 0DTE, enabled here to forward-test the
+    # 0DTE playbook on live Tradier data (PAPER ONLY - no real capital). 0DTE is
+    # the highest-variance mode; keep it on paper until real results prove out.
+    # SPY/QQQ have daily expirations, so 0DTE contracts are always available.
+    strategies: [default, zerodte]
     risk:
       max_trade_risk_pct: 0.30
       max_open_positions: 2
@@ -77,8 +80,15 @@ strategies:
       max_delta: 0.55
       max_spread_pct: 0.18
     exits:
+      # Long-premium 0DTE is structurally LOW win rate (~35-45%): theta bleeds
+      # every minute and you need a fast directional move. The edge, if any,
+      # comes from big winners + banking partial profit early, NOT a high hit
+      # rate. Target expectancy/profit-factor > 0, not "win %".
       profit_target_pct: 0.80
-      stop_loss_pct: 0.30
+      # Wider stop than the weekly trade: 0DTE gamma/IV cause large intraday
+      # swings, so a tight stop gets whipsawed out of trades that recover. The
+      # trim ladder banks profit early, which offsets the bigger max loss.
+      stop_loss_pct: 0.50
       max_holding_days: 0
       min_dte_exit: 0
       # Scale-out ladder: bank profit into strength, let a runner ride to the
