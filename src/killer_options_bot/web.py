@@ -454,6 +454,46 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
 """
 
 
+def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
+    """Table of individual past (closed) trades, most recent first."""
+    if not closed:
+        body = (
+            "<tr><td colspan='8' class='muted'>No closed trades yet.</td></tr>"
+        )
+    else:
+        # closed_positions() returns oldest-first by id; show newest first.
+        rows = []
+        for p in reversed(closed[-limit:]):
+            pl = p.realized_pl() or 0.0
+            cls = "pos" if pl >= 0 else "neg"
+            pct = 0.0
+            if p.exit_price is not None and p.entry_price > 0:
+                pct = (p.exit_price - p.entry_price) / p.entry_price
+            exit_d = p.exit_date.isoformat() if p.exit_date else "-"
+            reason = html.escape(p.exit_reason or "")
+            rows.append(
+                f"<tr><td>{html.escape(p.underlying)}</td>"
+                f"<td>{html.escape(p.side.value.upper())} {p.strike:g}</td>"
+                f"<td>{html.escape(p.strategy or 'default')}</td>"
+                f"<td>{p.entry_date.isoformat()}</td>"
+                f"<td>{exit_d}</td>"
+                f"<td>{_fmt_money(p.entry_price)} &rarr; "
+                f"{_fmt_money(p.exit_price or 0.0)}</td>"
+                f"<td class='{cls}'>{_fmt_money(pl)} ({pct:+.0%})</td>"
+                f"<td class='reasons'>{reason}</td></tr>"
+            )
+        body = "".join(rows)
+    return f"""
+  <h2 style="font-size:15px;">Closed trades</h2>
+  <table>
+    <tr><th>Underlying</th><th>Contract</th><th>Strategy</th><th>Opened</th>
+        <th>Closed</th><th>Entry &rarr; Exit</th><th>Realized P/L</th>
+        <th>Reason</th></tr>
+    {body}
+  </table>
+"""
+
+
 def _fmt_age(seconds: float) -> str:
     """Human-friendly age like '8s', '3m', '2h 5m'."""
     seconds = int(max(0, seconds))
@@ -649,6 +689,7 @@ def _render_page(
 
     withdraw_html = _render_withdraw_section(config, storage)
     stats_html = _render_stats_section(closed)
+    closed_html = _render_closed_trades(closed)
     status_html = _render_status_banner(storage)
     toggles_html = _render_strategy_toggles(config, storage)
 
@@ -793,6 +834,8 @@ def _render_page(
         <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Mode</th></tr>
     {pos_body}
   </table>
+
+  {closed_html}
 
   <h2 style="font-size:15px;">Recent candidates</h2>
   <table>
