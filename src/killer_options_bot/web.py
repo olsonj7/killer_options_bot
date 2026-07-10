@@ -706,6 +706,21 @@ def _render_page(
   .wd-list strong {{ color: #d29922; }}
   a.nav {{ color: #58a6ff; text-decoration: none; font-size: 13px; }}
   a.nav:hover {{ text-decoration: underline; }}</style>
+<script>
+  // Auto-refresh the read-only dashboard so heartbeat/positions/P&L stay
+  // current without a manual reload. Skips reloading while a form control is
+  // focused (editing strategy toggles) or the tab is hidden, so it never
+  // interrupts an interaction or hammers the server in the background.
+  (function () {{
+    var INTERVAL_MS = 30000;
+    setInterval(function () {{
+      if (document.hidden) return;
+      var el = document.activeElement;
+      if (el && /^(INPUT|BUTTON|SELECT|TEXTAREA)$/.test(el.tagName)) return;
+      window.location.reload();
+    }}, INTERVAL_MS);
+  }})();
+</script>
 </head>
 <body>
 <header>
