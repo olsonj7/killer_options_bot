@@ -339,6 +339,8 @@ class BaseStorage:
             ),
             realized_pl_banked=float(row.get("realized_pl_banked") or 0.0),
             trims_done=int(row.get("trims_done") or 0),
+            mode=row.get("mode") or "paper",
+            broker_order_id=row.get("broker_order_id"),
         )
 
     def open_position(

@@ -181,6 +181,8 @@ class PaperPosition:
     original_quantity: int | None = None
     realized_pl_banked: float = 0.0
     trims_done: int = 0
+    mode: str = "paper"
+    broker_order_id: str | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:

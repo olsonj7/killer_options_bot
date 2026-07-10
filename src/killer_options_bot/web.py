@@ -587,6 +587,14 @@ def _render_page(
         pl_txt = f"{_fmt_money(upl)} ({p.pl_pct(price):+.0%})"
         if p.realized_pl_banked:
             pl_txt += f" +${p.realized_pl_banked:,.0f} banked"
+        if p.mode == "live":
+            oid = html.escape(p.broker_order_id or "—")
+            mode_cell = (
+                f"<span class='badge badge-live'>LIVE</span> "
+                f"<span class='oid'>#{oid}</span>"
+            )
+        else:
+            mode_cell = "<span class='badge badge-paper'>paper</span>"
         pos_rows.append(
             f"<tr><td>{html.escape(p.option_symbol)}</td>"
             f"<td>{html.escape(p.underlying)}</td>"
@@ -597,7 +605,8 @@ def _render_page(
             f"<td class='{cls}'>{pl_txt}</td>"
             f"<td>{p.holding_days(engine.as_of)}</td>"
             f"<td>{p.expiration.isoformat()}</td>"
-            f"<td>{p.dte(engine.as_of)}</td></tr>"
+            f"<td>{p.dte(engine.as_of)}</td>"
+            f"<td>{mode_cell}</td></tr>"
         )
 
     total = realized + unrealized
@@ -629,7 +638,7 @@ def _render_page(
     )
     pos_body = (
         "".join(pos_rows)
-        or "<tr><td colspan='10' class='muted'>No open positions.</td></tr>"
+        or "<tr><td colspan='11' class='muted'>No open positions.</td></tr>"
     )
     cand_body = (
         "".join(cand_rows)
@@ -706,7 +715,14 @@ def _render_page(
   .wd-list li {{ font-size: 13px; color: #c9d1d9; margin: 6px 0; }}
   .wd-list strong {{ color: #d29922; }}
   a.nav {{ color: #58a6ff; text-decoration: none; font-size: 13px; }}
-  a.nav:hover {{ text-decoration: underline; }}</style>
+  a.nav:hover {{ text-decoration: underline; }}
+  .badge {{ font-size: 11px; font-weight: 700; padding: 1px 6px;
+            border-radius: 10px; letter-spacing: 0.02em; }}
+  .badge-live {{ background: #f8514922; border: 1px solid #f85149;
+                 color: #f85149; }}
+  .badge-paper {{ background: #30363d; border: 1px solid #484f58;
+                  color: #8b949e; }}
+  .oid {{ font-size: 11px; color: #8b949e; }}</style>
 <script>
   // Auto-refresh the read-only dashboard so heartbeat/positions/P&L stay
   // current without a manual reload. Skips reloading while a form control is
@@ -774,7 +790,7 @@ def _render_page(
   <h2 style="font-size:15px;">Open positions</h2>
   <table>
     <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Qty</th><th>Entry</th>
-        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th></tr>
+        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Mode</th></tr>
     {pos_body}
   </table>
 
