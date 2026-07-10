@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS positions (
     exit_price {d.real},
     exit_date TEXT,
     exit_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS runtime_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -180,6 +186,56 @@ class BaseStorage:
                     "ALTER TABLE positions ADD COLUMN trims_done INTEGER "
                     "NOT NULL DEFAULT 0"
                 )
+
+    # --- Runtime state (cross-process key/value) ---------------------------
+
+    def set_state(self, key: str, value: str) -> None:
+        """Upsert a runtime_state row, stamping updated_at with UTC now.
+
+        Used for cross-process signals between the run loop and the dashboard
+        (which are often separate processes sharing one DB): a scan heartbeat
+        and per-strategy enable/disable toggles.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        self._execute(
+            "INSERT INTO runtime_state (key, value, updated_at) "
+            "VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "updated_at=excluded.updated_at",
+            (key, value, now),
+        )
+
+    def get_state(self, key: str, default: str | None = None) -> str | None:
+        row = self._query_one(
+            "SELECT value FROM runtime_state WHERE key = ?", (key,)
+        )
+        return row["value"] if row else default
+
+    def get_state_row(self, key: str) -> tuple[str, str] | None:
+        """Return (value, updated_at ISO) for ``key``, or None if unset."""
+        row = self._query_one(
+            "SELECT value, updated_at FROM runtime_state WHERE key = ?", (key,)
+        )
+        if not row:
+            return None
+        return row["value"], row["updated_at"]
+
+    # --- Strategy enable/disable toggles -----------------------------------
+
+    @staticmethod
+    def _strategy_key(name: str) -> str:
+        return f"strategy_enabled:{name}"
+
+    def strategy_enabled(self, name: str) -> bool:
+        """Whether ``name`` is enabled for new entries. Defaults to True when
+        no toggle has been set, so existing behaviour is unchanged."""
+        value = self.get_state(self._strategy_key(name))
+        if value is None:
+            return True
+        return value == "1"
+
+    def set_strategy_enabled(self, name: str, enabled: bool) -> None:
+        self.set_state(self._strategy_key(name), "1" if enabled else "0")
 
     # --- Candidates --------------------------------------------------------
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import base64
 import hmac
 import html
-from datetime import date
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
@@ -182,6 +182,27 @@ class Dashboard:
 
         tmp_path.replace(self.config_path)
         return f"Config saved: {updated} field(s) updated."
+
+    def set_strategies(self, form: dict[str, list[str]]) -> str:
+        """Persist which strategies are enabled from the checkbox form.
+
+        Checked boxes arrive as ``strategy=<name>`` entries; unchecked ones are
+        simply absent. Every active strategy is set explicitly so toggles are
+        deterministic regardless of prior state.
+        """
+        config, storage, _data, _engine = self._context()
+        checked = set(form.get("strategy", []))
+        on, off = [], []
+        for s in config.active_strategies:
+            enabled = s.name in checked
+            storage.set_strategy_enabled(s.name, enabled)
+            (on if enabled else off).append(s.name)
+        if not on:
+            return "All strategies disabled \u2014 no new entries will open."
+        summary = f"Strategies enabled: {', '.join(on)}"
+        if off:
+            summary += f"; disabled: {', '.join(off)}"
+        return summary + "."
 
     def render_config(self, flash: str = "") -> str:
         raw = self._load_raw_config()
@@ -433,6 +454,101 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
 """
 
 
+def _fmt_age(seconds: float) -> str:
+    """Human-friendly age like '8s', '3m', '2h 5m'."""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def _render_status_banner(storage: "BaseStorage") -> str:
+    """A live 'scans are running' indicator driven by the loop heartbeat.
+
+    The run loop upserts ``loop_heartbeat`` (value = "scanning" while the market
+    is open, "market_closed" when idle) every tick. If that timestamp goes stale
+    the loop isn't running at all, so we show a red 'not running' state.
+    """
+    row = storage.get_state_row("loop_heartbeat")
+    if row is None:
+        return (
+            "<div class='status status-off'>"
+            "\u25cf Scans not running \u2014 the trading loop has never "
+            "reported in. Start it with <code>run --source tradier</code> "
+            "or enable it on the host (KOB_RUN=1)."
+            "</div>"
+        )
+    state, updated_at = row
+    try:
+        beat = datetime.fromisoformat(updated_at)
+        if beat.tzinfo is None:
+            beat = beat.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - beat).total_seconds()
+    except ValueError:
+        age = 1e9
+    age_txt = _fmt_age(age)
+
+    # Stale heartbeat => the loop process is gone even if it once ran. Use a
+    # generous window so a slow tick or long 0DTE chain fetch doesn't flap.
+    if age > 300:
+        return (
+            "<div class='status status-off'>"
+            f"\u25cf Scans not running \u2014 last heartbeat {age_txt} ago. "
+            "The loop appears stopped."
+            "</div>"
+        )
+    if state == "scanning":
+        return (
+            "<div class='status status-on'>"
+            f"\u25cf Scanning \u2014 live (last scan {age_txt} ago)."
+            "</div>"
+        )
+    return (
+        "<div class='status status-idle'>"
+        f"\u25cf Loop alive, idle \u2014 market closed (heartbeat {age_txt} "
+        "ago). Scans resume at the next open."
+        "</div>"
+    )
+
+
+def _render_strategy_toggles(config: Config, storage: "BaseStorage") -> str:
+    """Checkboxes to enable/disable each active strategy for new entries.
+
+    Lets you match strategies to the market regime (flat / bullish / bearish)
+    without a redeploy. Disabling a strategy stops NEW entries only; exit
+    management of its existing positions always continues.
+    """
+    strategies = config.active_strategies
+    if not strategies:
+        return ""
+    boxes = []
+    for s in strategies:
+        enabled = storage.strategy_enabled(s.name)
+        checked = "checked" if enabled else ""
+        state_txt = "on" if enabled else "off"
+        state_cls = "pos" if enabled else "neg"
+        boxes.append(
+            f"<label class='toggle'>"
+            f"<input type='checkbox' name='strategy' "
+            f"value='{html.escape(s.name)}' {checked}>"
+            f"{html.escape(s.name)} "
+            f"<span class='{state_cls}'>({state_txt})</span>"
+            f"<span class='muted'> &middot; {html.escape(s.signal)}</span>"
+            f"</label>"
+        )
+    return (
+        "<h2 style='font-size:15px;'>Strategies to scan</h2>"
+        "<form method='post' action='/strategies' class='toggles'>"
+        + "".join(boxes)
+        + "<button type='submit'>Save strategy selection</button>"
+        "<div class='warn'>Unchecked strategies stop opening NEW trades; "
+        "open positions are still managed to their exits.</div>"
+        "</form>"
+    )
+
+
 def _render_page(
     config: Config,
     storage: "BaseStorage",
@@ -523,6 +639,8 @@ def _render_page(
 
     withdraw_html = _render_withdraw_section(config, storage)
     stats_html = _render_stats_section(closed)
+    status_html = _render_status_banner(storage)
+    toggles_html = _render_strategy_toggles(config, storage)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -562,6 +680,22 @@ def _render_page(
   .flash {{ background: #1f6feb22; border: 1px solid #1f6feb;
             color: #cae1ff; padding: 10px 14px; border-radius: 6px;
             margin-bottom: 18px; font-size: 14px; }}
+  .status {{ padding: 10px 14px; border-radius: 6px; margin-bottom: 18px;
+             font-size: 14px; font-weight: 600; border: 1px solid; }}
+  .status-on {{ background: #23863622; border-color: #238636;
+                color: #3fb950; }}
+  .status-idle {{ background: #d2992222; border-color: #d29922;
+                  color: #e3b341; }}
+  .status-off {{ background: #f8514922; border-color: #f85149;
+                 color: #f85149; }}
+  .status code {{ background: #0e1116; padding: 1px 5px; border-radius: 4px;
+                  font-size: 12px; color: #e6edf3; }}
+  .toggles {{ display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+              background: #161b22; border: 1px solid #30363d;
+              border-radius: 8px; padding: 14px 18px; margin-bottom: 28px; }}
+  .toggle {{ font-size: 14px; display: flex; align-items: center; gap: 6px;
+             cursor: pointer; }}
+  .toggles .warn {{ flex-basis: 100%; margin: 0; }}
   .warn {{ color: #d29922; font-size: 12px; margin-top: 8px; }}
   .chart {{ background: #161b22; border: 1px solid #30363d;
             border-radius: 8px; margin-bottom: 28px; }}
@@ -583,6 +717,7 @@ def _render_page(
 </header>
 <main>
   {flash_html}
+  {status_html}
   <div class="actions">
     <form method="post" action="/scan-paper">
       <button type="submit">Scan &amp; open paper trades</button>
@@ -595,6 +730,8 @@ def _render_page(
     </form>
     <a class="nav" href="/export.csv" style="align-self:center;">Export CSV</a>
   </div>
+
+  {toggles_html}
 
   <div class="cards">
     <div class="card"><div class="label">Total P/L</div>
@@ -799,6 +936,15 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
                 except Exception as exc:
                     _set_flash(f"Error: {exc}")
                 self._redirect("/config")
+                return
+
+            if path == "/strategies":
+                form = parse_qs(body.decode("utf-8"))
+                try:
+                    _set_flash(dashboard.set_strategies(form))
+                except Exception as exc:
+                    _set_flash(f"Error: {exc}")
+                self._redirect("/")
                 return
 
             action: Callable[[], str] | None = {

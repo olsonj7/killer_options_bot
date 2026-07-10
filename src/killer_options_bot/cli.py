@@ -663,11 +663,20 @@ def run_loop(
     next_scan: dict[str, float] = {s.name: 0.0 for s in strategies}
     cycles = 0
 
+    def _heartbeat(state: str) -> None:
+        # Cross-process liveness signal for the dashboard. ``state`` is
+        # "scanning" while the market is open or "market_closed" when idle.
+        try:
+            storage.set_state("loop_heartbeat", state)
+        except Exception:  # pragma: no cover - never let telemetry crash loop
+            pass
+
     while not _stopped():
         now_mono = _time.monotonic()
         open_now = ignore_market_hours or market.is_market_open()
 
         if not open_now:
+            _heartbeat("market_closed")
             wait = (
                 tick
                 if ignore_market_hours
@@ -683,6 +692,7 @@ def run_loop(
             _sleep(wait)
             continue
 
+        _heartbeat("scanning")
         as_of = date.today()
         data = _build_data_source(source, config, as_of=None)
         engine = PaperEngine(
@@ -705,8 +715,17 @@ def run_loop(
         # 2) Scan each strategy that is due for new entries.
         opened = 0
         scanned = []
+        skipped = []
         for strategy in strategies:
             if now_mono < next_scan[strategy.name]:
+                continue
+            # Live enable/disable toggle set from the dashboard (defaults to
+            # enabled). Lets you match strategies to the market regime without
+            # a redeploy. Exit management above always runs regardless, so
+            # disabling a strategy stops NEW entries but still protects any
+            # positions it already opened.
+            if not storage.strategy_enabled(strategy.name):
+                skipped.append(strategy.name)
                 continue
             scanned.append(strategy.name)
             next_scan[strategy.name] = (
@@ -727,7 +746,8 @@ def run_loop(
                         f"${position.entry_price:.2f}"
                     )
         if scanned and opened == 0:
-            log(f"[{stamp}] scanned {scanned}: no new entries")
+            extra = f" (skipped {skipped})" if skipped else ""
+            log(f"[{stamp}] scanned {scanned}: no new entries{extra}")
 
         cycles += 1
         if once:
