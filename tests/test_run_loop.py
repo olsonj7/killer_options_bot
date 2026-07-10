@@ -147,3 +147,46 @@ def test_run_loop_stops_on_event(tmp_path):
     assert any("Run loop starting" in m for m in logs)
     assert any("Run loop finished" in m for m in logs)
 
+
+# --- KOB_RUN resolution (regression: env must not silently suppress --run) ---
+
+
+def test_resolve_run_loop_flag_only():
+    from killer_options_bot.cli import _resolve_run_loop
+
+    # No KOB_RUN: honor the --run flag as-is.
+    assert _resolve_run_loop(None, True) == (True, None)
+    assert _resolve_run_loop(None, False) == (False, None)
+
+
+def test_resolve_run_loop_env_truthy_enables():
+    from killer_options_bot.cli import _resolve_run_loop
+
+    for val in ("1", "true", "TRUE", "yes", "on", " On "):
+        run, _note = _resolve_run_loop(val, False)
+        assert run is True
+
+
+def test_resolve_run_loop_env_falsy_disables_even_with_flag():
+    from killer_options_bot.cli import _resolve_run_loop
+
+    for val in ("0", "false", "no", "off"):
+        run, note = _resolve_run_loop(val, True)
+        assert run is False
+        assert "DISABLED by KOB_RUN" in note
+
+
+def test_resolve_run_loop_blank_env_does_not_suppress_flag():
+    """The Railway footgun: blank KOB_RUN must NOT override --run."""
+    from killer_options_bot.cli import _resolve_run_loop
+
+    assert _resolve_run_loop("", True) == (True, None)
+
+
+def test_resolve_run_loop_garbage_env_warns_and_falls_back():
+    from killer_options_bot.cli import _resolve_run_loop
+
+    run, note = _resolve_run_loop("maybe", True)
+    assert run is True
+    assert "not a recognized boolean" in note
+

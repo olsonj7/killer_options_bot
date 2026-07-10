@@ -486,6 +486,38 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_run_loop(
+    run_env: str | None, run_flag: bool
+) -> tuple[bool, str | None]:
+    """Decide whether the embedded run loop should start.
+
+    ``run_flag`` is the ``--run`` CLI flag; ``run_env`` is the raw ``KOB_RUN``
+    environment value (or None). Only explicit booleans in KOB_RUN override the
+    flag; anything unset/blank/unrecognized falls back to ``run_flag`` so a
+    stray env var can never silently suppress a ``--run`` start command. Returns
+    ``(run_loop, note)`` where ``note`` is an optional message to log.
+    """
+    truthy = {"1", "true", "yes", "on"}
+    falsy = {"0", "false", "no", "off"}
+    normalized = run_env.strip().lower() if run_env is not None else None
+    if normalized in truthy:
+        note = None if run_flag else f"run loop ENABLED by KOB_RUN={run_env}"
+        return True, note
+    if normalized in falsy:
+        note = (
+            f"run loop DISABLED by KOB_RUN={run_env} (overriding --run)"
+            if run_flag
+            else None
+        )
+        return False, note
+    if run_env not in (None, ""):
+        return run_flag, (
+            f"WARNING: KOB_RUN={run_env!r} is not a recognized boolean "
+            f"(use 1/0/true/false); falling back to --run={run_flag}"
+        )
+    return run_flag, None
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import os
 
@@ -539,15 +571,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Optional embedded run loop. Enabled by the --run flag; the KOB_RUN env
-    # var overrides it when set (so a deploy whose start command includes --run
-    # can still be turned off with KOB_RUN=0 without a redeploy). Lets one
-    # process (e.g. a single Railway service) both trade and serve the UI.
-    run_env = os.getenv("KOB_RUN")
-    if run_env is not None:
-        run_loop = run_env.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        run_loop = bool(args.run)
+    # Optional embedded run loop. Enabled by the --run flag. KOB_RUN can force
+    # it on or off without a redeploy, but ONLY explicit truthy/falsy values
+    # count: an unset or blank/garbage KOB_RUN must NOT silently suppress a
+    # --run start command (that footgun once left the loop off on Railway while
+    # the dashboard still served). We log exactly what won and why.
+    run_loop, note = _resolve_run_loop(os.getenv("KOB_RUN"), bool(args.run))
+    if note:
+        print(note)
 
     serve(
         config_path=args.config,
