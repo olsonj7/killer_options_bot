@@ -71,6 +71,20 @@ class ExitConfig:
     #: Optional scale-out ladder. Empty means all-or-nothing exits. Contracts
     #: are trimmed on strength before the terminal target/stop closes the rest.
     trims: tuple["TrimRule", ...] = ()
+    #: Optional trailing stop on the runner. ``trail_pct`` is the give-back from
+    #: the position's high-water option mid that triggers an exit (0.20 = exit
+    #: once the mid falls 20% below its peak). ``trail_activate_pct`` is the
+    #: profit level that must first be reached before the trail arms (0.30 =
+    #: only start trailing after +30%). When ``trail_pct`` > 0 the trailing stop
+    #: REPLACES the fixed ``profit_target_pct`` so winners can run; the stop
+    #: loss, max-hold and DTE exits still apply. 0 disables trailing.
+    trail_pct: float = 0.0
+    trail_activate_pct: float = 0.0
+
+    @property
+    def trailing_enabled(self) -> bool:
+        return self.trail_pct > 0.0
+
 
 
 @dataclass(frozen=True)
@@ -322,11 +336,17 @@ def _build_exits(d: dict) -> ExitConfig:
         max_holding_days=int(d.get("max_holding_days", 21)),
         min_dte_exit=int(d.get("min_dte_exit", 21)),
         trims=_build_trims(d.get("trims", [])),
+        trail_pct=float(d.get("trail_pct", 0.0)),
+        trail_activate_pct=float(d.get("trail_activate_pct", 0.0)),
     )
     if cfg.profit_target_pct <= 0:
         raise ValueError("exits.profit_target_pct must be positive")
     if not 0 < cfg.stop_loss_pct <= 1:
         raise ValueError("exits.stop_loss_pct must be between 0 and 1")
+    if not 0 <= cfg.trail_pct < 1:
+        raise ValueError("exits.trail_pct must be between 0 and 1 (0 disables)")
+    if cfg.trail_activate_pct < 0:
+        raise ValueError("exits.trail_activate_pct must be >= 0")
     return cfg
 
 

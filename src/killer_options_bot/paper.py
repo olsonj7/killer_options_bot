@@ -143,8 +143,22 @@ class PaperEngine:
         e = self._exits_for(position)
         pl_pct = position.pl_pct(option_price)
 
-        if pl_pct >= e.profit_target_pct:
+        if e.trailing_enabled:
+            # Trailing stop replaces the fixed profit target so the runner can
+            # ride. It arms only once profit reaches trail_activate_pct, then
+            # exits when the mid gives back trail_pct from its high-water mark.
+            peak = position.high_water_mark or position.entry_price
+            peak_pl = (peak - position.entry_price) / position.entry_price
+            if peak_pl >= e.trail_activate_pct:
+                trigger = peak * (1 - e.trail_pct)
+                if option_price <= trigger:
+                    return (
+                        f"trailing stop hit ({pl_pct:+.0%}, "
+                        f"peak +{peak_pl:.0%})"
+                    )
+        elif pl_pct >= e.profit_target_pct:
             return f"profit target hit (+{pl_pct:.0%})"
+
         if pl_pct <= -e.stop_loss_pct:
             return f"stop loss hit ({pl_pct:.0%})"
         if position.holding_days(self.as_of) >= e.max_holding_days:
@@ -248,6 +262,13 @@ class PaperEngine:
                 trimmed=trimmed,
                 banked=banked,
             )
+
+        # Ratchet the high-water mark up as the mid makes new peaks; this feeds
+        # the trailing stop. Persist only when it actually advances.
+        prev_hwm = position.high_water_mark or position.entry_price
+        if contract.mid > prev_hwm:
+            position.high_water_mark = contract.mid
+            self.storage.update_high_water_mark(position.id, contract.mid)
 
         # Exit rules trigger on the current market mid; the actual fill is at
         # the (worse) cost-adjusted exit price.

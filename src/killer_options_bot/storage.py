@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS positions (
     original_quantity INTEGER,
     realized_pl_banked {d.real} NOT NULL DEFAULT 0,
     trims_done INTEGER NOT NULL DEFAULT 0,
+    high_water_mark {d.real},
     broker_order_id TEXT,
     exit_price {d.real},
     exit_date TEXT,
@@ -185,6 +186,12 @@ class BaseStorage:
                 conn.execute(
                     "ALTER TABLE positions ADD COLUMN trims_done INTEGER "
                     "NOT NULL DEFAULT 0"
+                )
+        if cols and "high_water_mark" not in cols:
+            with self._connect() as conn:
+                conn.execute(
+                    f"ALTER TABLE positions ADD COLUMN high_water_mark "
+                    f"{self.dialect.real}"
                 )
 
     # --- Runtime state (cross-process key/value) ---------------------------
@@ -341,6 +348,11 @@ class BaseStorage:
             trims_done=int(row.get("trims_done") or 0),
             mode=row.get("mode") or "paper",
             broker_order_id=row.get("broker_order_id"),
+            high_water_mark=(
+                float(row["high_water_mark"])
+                if row.get("high_water_mark") is not None
+                else None
+            ),
         )
 
     def open_position(
@@ -355,8 +367,9 @@ class BaseStorage:
                 option_symbol, underlying, side, strike, expiration,
                 quantity, entry_price, entry_date, status, mode,
                 broker_order_id, exit_price, exit_date, exit_reason, strategy,
-                original_quantity, realized_pl_banked, trims_done
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                original_quantity, realized_pl_banked, trims_done,
+                high_water_mark
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 position.option_symbol,
@@ -377,6 +390,7 @@ class BaseStorage:
                 position.original_quantity or position.quantity,
                 position.realized_pl_banked,
                 position.trims_done,
+                position.high_water_mark,
             ),
         )
         return position.id
@@ -398,6 +412,13 @@ class BaseStorage:
             WHERE id = ?
             """,
             (new_quantity, realized_pl_banked, trims_done, position_id),
+        )
+
+    def update_high_water_mark(self, position_id: int, value: float) -> None:
+        """Record a new peak option mid for a position's trailing stop."""
+        self._execute(
+            "UPDATE positions SET high_water_mark = ? WHERE id = ?",
+            (value, position_id),
         )
 
     def close_position(

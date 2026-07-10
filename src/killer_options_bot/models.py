@@ -183,6 +183,7 @@ class PaperPosition:
     trims_done: int = 0
     mode: str = "paper"
     broker_order_id: str | None = None
+    high_water_mark: float | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
@@ -190,6 +191,10 @@ class PaperPosition:
         # equals its current size unless a stored value is supplied.
         if self.original_quantity is None:
             self.original_quantity = self.quantity
+        # The high-water mark tracks the peak option mid seen while held; a
+        # fresh position starts at its entry price.
+        if self.high_water_mark is None:
+            self.high_water_mark = self.entry_price
 
     @property
     def entry_cost(self) -> float:

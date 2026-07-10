@@ -127,6 +127,91 @@ def test_max_holding_days_exit(tmp_path):
     assert "max holding" in engine.exit_reason(pos, 1.00)
 
 
+def _trailing_config(tmp_path):
+    """Config whose base exits use a trailing stop instead of a fixed target."""
+    from killer_options_bot.config import ExitConfig
+
+    return make_config(
+        tmp_path,
+        exits=ExitConfig(
+            profit_target_pct=0.35,
+            stop_loss_pct=0.45,
+            max_holding_days=21,
+            min_dte_exit=0,
+            trail_pct=0.20,
+            trail_activate_pct=0.30,
+        ),
+    )
+
+
+def test_trailing_stop_not_armed_below_activation(tmp_path):
+    config = _trailing_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)
+    pos.high_water_mark = 1.25  # peak only +25%, below +30% activation
+    # Even a pullback should NOT exit while the trail is unarmed.
+    assert engine.exit_reason(pos, 1.05) is None
+
+
+def test_trailing_stop_does_not_fire_above_trigger(tmp_path):
+    config = _trailing_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)
+    pos.high_water_mark = 1.50  # armed (+50%), trigger at 1.20
+    assert engine.exit_reason(pos, 1.50) is None  # at the peak
+    assert engine.exit_reason(pos, 1.30) is None  # pullback above trigger
+
+
+def test_trailing_stop_fires_on_giveback(tmp_path):
+    config = _trailing_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)
+    pos.high_water_mark = 1.50  # armed (+50%), trigger at 1.20
+    reason = engine.exit_reason(pos, 1.20)
+    assert reason is not None and "trailing stop" in reason
+
+
+def test_trailing_stop_lets_winner_run_past_fixed_target(tmp_path):
+    config = _trailing_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)
+    pos.high_water_mark = 2.00
+    # +100% would have closed under the fixed 0.35 target; with trailing the
+    # runner keeps going and only the trail (or stop) exits.
+    assert engine.exit_reason(pos, 2.00) is None
+
+
+def test_trailing_stop_loss_still_applies(tmp_path):
+    config = _trailing_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)  # never armed the trail
+    assert "stop loss" in engine.exit_reason(pos, 0.50)
+
+
+def test_high_water_mark_persists_and_reloads(tmp_path):
+    config = make_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    data = MockMarketData(as_of=as_of)
+    storage = Storage(config.db_path)
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+    pos = engine.open_from_candidate(make_candidate(as_of))
+    assert pos is not None
+    # Fresh position: high-water mark defaults to entry price.
+    assert storage.open_positions()[0].high_water_mark == pos.entry_price
+    storage.update_high_water_mark(pos.id, 3.33)
+    assert storage.open_positions()[0].high_water_mark == 3.33
+
+
 def test_min_dte_exit(tmp_path):
     config = make_config(tmp_path)  # min_dte_exit 21
     entry = date(2026, 1, 1)

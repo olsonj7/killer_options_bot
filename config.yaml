@@ -123,6 +123,11 @@ strategies:
       stop_loss_pct: 0.40
       max_holding_days: 10
       min_dte_exit: 2
+      # Trend trade: let winners run. Once up +30% a trailing stop arms and
+      # replaces the fixed profit target, exiting only after the option mid
+      # gives back 20% from its high-water peak. Stop/max-hold/DTE still apply.
+      trail_activate_pct: 0.30
+      trail_pct: 0.20
   leaps:
     # Long-dated, high-conviction directional bets. Deep-ish delta for share
     # substitution, patient hold measured in weeks, exit well before expiry.
@@ -140,6 +145,11 @@ strategies:
       stop_loss_pct: 0.50
       max_holding_days: 60
       min_dte_exit: 30
+      # High-conviction long-dated bet: ride the trend. Arm the trailing stop
+      # after +50% and give the runner a wider 30% give-back band so normal
+      # multi-week volatility doesn't shake it out of a big move.
+      trail_activate_pct: 0.50
+      trail_pct: 0.30
 
 
 mode:
