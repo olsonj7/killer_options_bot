@@ -596,6 +596,7 @@ def _render_page(
             f"<td>{_fmt_money(price)}</td>"
             f"<td class='{cls}'>{pl_txt}</td>"
             f"<td>{p.holding_days(engine.as_of)}</td>"
+            f"<td>{p.expiration.isoformat()}</td>"
             f"<td>{p.dte(engine.as_of)}</td></tr>"
         )
 
@@ -628,7 +629,7 @@ def _render_page(
     )
     pos_body = (
         "".join(pos_rows)
-        or "<tr><td colspan='8' class='muted'>No open positions.</td></tr>"
+        or "<tr><td colspan='10' class='muted'>No open positions.</td></tr>"
     )
     cand_body = (
         "".join(cand_rows)
@@ -773,7 +774,7 @@ def _render_page(
   <h2 style="font-size:15px;">Open positions</h2>
   <table>
     <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Qty</th><th>Entry</th>
-        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>DTE</th></tr>
+        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th></tr>
     {pos_body}
   </table>
 
