@@ -161,10 +161,20 @@ class PaperEngine:
 
         if pl_pct <= -e.stop_loss_pct:
             return f"stop loss hit ({pl_pct:.0%})"
-        if position.holding_days(self.as_of) >= e.max_holding_days:
-            return f"max holding days ({e.max_holding_days}d) reached"
-        if position.dte(self.as_of) <= e.min_dte_exit:
-            return f"DTE <= {e.min_dte_exit}, exiting expiration zone"
+
+        # Calendar-based forced exits (time-in-trade and expiration zone) must
+        # not fire on the ENTRY day. Otherwise a same-day / 0DTE strategy
+        # (max_holding_days=0, or a 0DTE option where dte==min_dte_exit==0)
+        # would be closed on the very first manage tick, seconds after opening,
+        # before its profit/stop/trim/trail rules can work. Intraday risk is
+        # already covered by the profit target, stop loss and trailing stop
+        # above; these two rules only bound how long a trade may be *carried*.
+        held = position.holding_days(self.as_of)
+        if held >= 1:
+            if held >= e.max_holding_days:
+                return f"max holding days ({e.max_holding_days}d) reached"
+            if position.dte(self.as_of) <= e.min_dte_exit:
+                return f"DTE <= {e.min_dte_exit}, exiting expiration zone"
         return None
 
     # --- Managing open positions ------------------------------------------

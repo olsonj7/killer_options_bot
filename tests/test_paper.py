@@ -233,6 +233,72 @@ def test_min_dte_exit(tmp_path):
     assert "DTE" in engine.exit_reason(pos, 1.05)
 
 
+def _zerodte_config(tmp_path):
+    """Config whose base exits mimic zerodte: same-day, no overnight hold."""
+    from killer_options_bot.config import ExitConfig
+
+    return make_config(
+        tmp_path,
+        exits=ExitConfig(
+            profit_target_pct=0.80,
+            stop_loss_pct=0.50,
+            max_holding_days=0,
+            min_dte_exit=0,
+        ),
+    )
+
+
+def test_same_day_position_not_closed_on_entry_day(tmp_path):
+    # Regression: a 0DTE trade (max_holding_days=0, min_dte_exit=0, dte=0) must
+    # NOT be force-closed on the entry day by the calendar rules. Before the
+    # fix, holding_days(0) >= 0 closed it on the first manage tick.
+    config = _zerodte_config(tmp_path)
+    entry = date(2026, 1, 2)
+    pos = PaperPosition(
+        option_symbol="X",
+        underlying="SPY",
+        side=Side.PUT,
+        strike=752.5,
+        expiration=entry,  # 0DTE: expires the entry day
+        quantity=1,
+        entry_price=2.00,
+        entry_date=entry,
+    )
+    engine = PaperEngine(config, MockMarketData(as_of=entry),
+                         Storage(config.db_path), as_of=entry)
+    # Small adverse move, still within the stop: should HOLD, not close.
+    assert engine.exit_reason(pos, 1.90) is None
+
+
+def test_same_day_position_still_hits_profit_and_stop(tmp_path):
+    # Intraday risk/target management must still work on the entry day.
+    config = _zerodte_config(tmp_path)
+    entry = date(2026, 1, 2)
+    pos = PaperPosition(
+        option_symbol="X", underlying="SPY", side=Side.PUT, strike=752.5,
+        expiration=entry, quantity=1, entry_price=2.00, entry_date=entry,
+    )
+    engine = PaperEngine(config, MockMarketData(as_of=entry),
+                         Storage(config.db_path), as_of=entry)
+    assert "profit target" in engine.exit_reason(pos, 3.70)  # +85%
+    assert "stop loss" in engine.exit_reason(pos, 0.90)      # -55%
+
+
+def test_same_day_position_closes_if_carried_overnight(tmp_path):
+    # max_holding_days=0 means "no overnight hold": on the NEXT day it closes.
+    config = _zerodte_config(tmp_path)
+    entry = date(2026, 1, 2)
+    pos = PaperPosition(
+        option_symbol="X", underlying="SPY", side=Side.PUT, strike=752.5,
+        expiration=entry + timedelta(days=1), quantity=1, entry_price=2.00,
+        entry_date=entry,
+    )
+    later = entry + timedelta(days=1)
+    engine = PaperEngine(config, MockMarketData(as_of=later),
+                         Storage(config.db_path), as_of=later)
+    assert "max holding days" in engine.exit_reason(pos, 1.95)
+
+
 def test_hold_when_no_rule_triggers(tmp_path):
     config = make_config(tmp_path)
     as_of = date(2026, 1, 1)
