@@ -390,6 +390,10 @@ def _trade_stats(closed: list[PaperPosition]) -> list[dict]:
         avg_win = sum(wins) / len(wins) if wins else 0.0
         avg_loss = sum(losses) / len(losses) if losses else 0.0
         rr = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
+        # Per-trade percentage return on the original debit risked (includes
+        # any profit banked from trims), averaged across the group. Same basis
+        # as R (risk = the debit paid), shown as a percent for readability.
+        avg_pct = (sum(rs) / len(rs)) if rs else 0.0
         return {
             "type": name,
             "wins": len(wins),
@@ -400,6 +404,7 @@ def _trade_stats(closed: list[PaperPosition]) -> list[dict]:
             "avg_loser": avg_loss,
             "risk_reward": rr,
             "total_r": sum(rs),
+            "avg_pct": avg_pct,
         }
 
     by_strategy: dict[str, list[PaperPosition]] = {}
@@ -417,7 +422,7 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
     stats = _trade_stats(closed)
     if not any(row["total"] for row in stats):
         body = (
-            "<tr><td colspan='9' class='muted'>No closed trades yet &mdash; "
+            "<tr><td colspan='10' class='muted'>No closed trades yet &mdash; "
             "stats appear once trades are managed to exit.</td></tr>"
         )
     else:
@@ -428,12 +433,14 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
             if is_total:
                 name = f"<strong>{name}</strong>"
             rcls = "pos" if row["total_r"] >= 0 else "neg"
+            pcls = "pos" if row["avg_pct"] >= 0 else "neg"
             cells.append(
                 f"<tr><td>{name}</td>"
                 f"<td>{row['wins']}</td>"
                 f"<td>{row['losses']}</td>"
                 f"<td>{row['total']}</td>"
                 f"<td>{row['win_rate']:.0%}</td>"
+                f"<td class='{pcls}'>{row['avg_pct']:+.0%}</td>"
                 f"<td class='pos'>{row['avg_winner']:+.2f}R</td>"
                 f"<td class='neg'>{row['avg_loser']:+.2f}R</td>"
                 f"<td>{row['risk_reward']:.2f}</td>"
@@ -447,7 +454,7 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
   </h2>
   <table>
     <tr><th>Type</th><th>Wins</th><th>Losses</th><th>Total</th>
-        <th>Win rate</th><th>Avg winner</th><th>Avg loser</th>
+        <th>Win rate</th><th>Avg P/L %</th><th>Avg winner</th><th>Avg loser</th>
         <th>Risk:Reward</th><th>Total (R)</th></tr>
     {body}
   </table>
