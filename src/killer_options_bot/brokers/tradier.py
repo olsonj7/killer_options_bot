@@ -90,9 +90,19 @@ class TradierMarketData:
         ``session_filter=open`` so pre/post-market prints are excluded. Returns
         an empty list before the open or if the series is unavailable (the
         intraday signal then simply declines to trade).
+
+        Times are computed in US/Eastern (exchange time), which is what Tradier
+        interprets the ``start``/``end`` params as. Using the host clock breaks
+        on any non-ET machine (e.g. a UTC container or a CST laptop), where a
+        naive "now" would fall before the 09:30 session start and 400.
         """
-        now = datetime.now()
+        from killer_options_bot.market import EASTERN
+
+        now = datetime.now(EASTERN)
         start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        if now < start:
+            # Before today's open: nothing to fetch, decline gracefully.
+            return []
         data = self._get(
             "/markets/timesales",
             {
