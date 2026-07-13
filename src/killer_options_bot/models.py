@@ -15,6 +15,36 @@ class Side(str, Enum):
 
 
 @dataclass(frozen=True)
+class Bar:
+    """A single OHLC price bar (daily or intraday).
+
+    Carries the full range needed by price-action signals (TheSTRAT bar typing,
+    fair-value gaps, prior-day high/low bias). Unlike a bare close, the high and
+    low are what define a bar's "range" and whether the next bar breaks it.
+    """
+
+    open: float
+    high: float
+    low: float
+    close: float
+
+    @property
+    def range(self) -> float:
+        """Full high-to-low range of the bar (always >= 0)."""
+        return max(0.0, self.high - self.low)
+
+    @property
+    def midpoint(self) -> float:
+        """Midpoint of the bar's range."""
+        return (self.high + self.low) / 2
+
+    @property
+    def is_up(self) -> bool:
+        """True if the bar closed at or above its open."""
+        return self.close >= self.open
+
+
+@dataclass(frozen=True)
 class Quote:
     """A minimal snapshot of an underlying symbol."""
 
@@ -25,6 +55,13 @@ class Quote:
     # Intraday bar closes for the current session, oldest first. Populated only
     # for strategies that use an intraday signal (e.g. 0DTE); empty otherwise.
     intraday: list[float] = field(default_factory=list)
+    # Intraday OHLC bars for the current session, oldest first. Populated only
+    # for price-action signals that need full ranges (e.g. STRAT bar typing);
+    # empty otherwise.
+    bars: list["Bar"] = field(default_factory=list)
+    # Recent daily OHLC bars, oldest first, ending with the most recently
+    # completed session. Used for prior-day high/low (PDH/PDL) bias.
+    daily_bars: list["Bar"] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

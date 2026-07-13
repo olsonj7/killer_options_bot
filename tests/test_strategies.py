@@ -158,10 +158,10 @@ def test_tier_without_strategies_key_uses_default(tmp_path):
 # --- per-strategy exit management ------------------------------------------
 
 
-def _make_candidate(strategy: str) -> Candidate:
+def _make_candidate(strategy: str, underlying: str = "SPY") -> Candidate:
     contract = OptionContract(
         symbol=f"OPT-{strategy}",
-        underlying="SPY",
+        underlying=underlying,
         side=Side.CALL,
         strike=100.0,
         expiration=date(2026, 3, 20),
@@ -218,8 +218,10 @@ def test_position_remembers_strategy_and_uses_its_exits(tmp_path):
     engine = PaperEngine(
         cfg, MockMarketData(as_of=date(2026, 2, 2)), storage, as_of=date(2026, 2, 2)
     )
-    fast = engine.open_from_candidate(_make_candidate("fast"))
-    slow = engine.open_from_candidate(_make_candidate("slow"))
+    # Distinct underlyings so the one-position-per-underlying rule doesn't block
+    # the second open; this test is about per-strategy exits, not stacking.
+    fast = engine.open_from_candidate(_make_candidate("fast", underlying="SPY"))
+    slow = engine.open_from_candidate(_make_candidate("slow", underlying="QQQ"))
     assert fast.strategy == "fast"
     assert slow.strategy == "slow"
 

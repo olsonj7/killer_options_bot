@@ -34,6 +34,14 @@ class SignalConfig:
     rsi_period: int
     rsi_min: float
     rsi_max: float
+    # Minimum distance price must sit BEYOND the SMA to count as a real trend,
+    # as a fraction of price (0.005 = 0.5%). Filters out "barely above the line"
+    # entries that are really just noise around the mean. 0 disables the buffer.
+    trend_buffer_pct: float = 0.0
+    # If > 0, require the SMA itself to be sloping in the trade's direction over
+    # this many bars (rising for calls, falling for puts). Enforces trend
+    # alignment so we don't buy calls into a rolling-over average. 0 disables.
+    slope_lookback: int = 0
     # Intraday-signal settings (used by the 'intraday_momentum' signal). Bars
     # are Tradier timesales at this interval; the SMA/RSI use shorter periods
     # than the daily signal so a same-day trend is detectable early in the
@@ -41,6 +49,15 @@ class SignalConfig:
     intraday_interval: str = "5min"
     intraday_sma_period: int = 9
     intraday_rsi_period: int = 9
+    # STRAT breakout settings (used by the 'strat_breakout' signal). Bars are
+    # OHLC (Tradier timesales) at ``strat_interval``; an entry fires when the
+    # last completed bar is a directional STRAT "2" bar (breaks the prior bar's
+    # high or low) whose range clears ``strat_displacement_mult`` x the average
+    # range of the last ``strat_atr_period`` bars (a displacement/impulse), and
+    # the move aligns with the prior-day high/low (PDH/PDL) bias.
+    strat_interval: str = "15min"
+    strat_displacement_mult: float = 1.5
+    strat_atr_period: int = 10
 
 
 @dataclass(frozen=True)
@@ -350,7 +367,7 @@ def _build_exits(d: dict) -> ExitConfig:
     return cfg
 
 
-_VALID_SIGNALS = {"momentum", "intraday_momentum"}
+_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout"}
 
 
 
@@ -416,9 +433,16 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         rsi_period=int(signal.get("rsi_period", 14)),
         rsi_min=float(signal.get("rsi_min", 45)),
         rsi_max=float(signal.get("rsi_max", 70)),
+        trend_buffer_pct=float(signal.get("trend_buffer_pct", 0.0)),
+        slope_lookback=int(signal.get("slope_lookback", 0)),
         intraday_interval=str(signal.get("intraday_interval", "5min")),
         intraday_sma_period=int(signal.get("intraday_sma_period", 9)),
         intraday_rsi_period=int(signal.get("intraday_rsi_period", 9)),
+        strat_interval=str(signal.get("strat_interval", "15min")),
+        strat_displacement_mult=float(
+            signal.get("strat_displacement_mult", 1.5)
+        ),
+        strat_atr_period=int(signal.get("strat_atr_period", 10)),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(
@@ -426,6 +450,18 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         )
     if signal_cfg.intraday_sma_period <= 0 or signal_cfg.intraday_rsi_period <= 0:
         raise ValueError("signal.intraday_*_period must be positive")
+    if not 0 <= signal_cfg.trend_buffer_pct < 1:
+        raise ValueError("signal.trend_buffer_pct must be in [0, 1)")
+    if signal_cfg.slope_lookback < 0:
+        raise ValueError("signal.slope_lookback must be >= 0")
+    if signal_cfg.strat_interval not in {"1min", "5min", "15min"}:
+        raise ValueError(
+            "signal.strat_interval must be one of 1min, 5min, 15min"
+        )
+    if signal_cfg.strat_displacement_mult < 0:
+        raise ValueError("signal.strat_displacement_mult must be >= 0")
+    if signal_cfg.strat_atr_period <= 0:
+        raise ValueError("signal.strat_atr_period must be positive")
 
     exits_cfg = _build_exits(exits)
 

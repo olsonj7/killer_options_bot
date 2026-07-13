@@ -21,6 +21,11 @@ EASTERN = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 
+#: Do not open new 0DTE (same-day-expiry) positions within this many minutes of
+#: the regular open. The opening range is the noisiest, widest-spread window of
+#: the session; skipping it avoids getting chopped up on same-day expiries.
+OPENING_RANGE_MINUTES = 30
+
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     """Return the date of the ``n``-th ``weekday`` (Mon=0) in a month."""
@@ -154,3 +159,25 @@ def seconds_until_open(moment: datetime | None = None) -> float:
     if is_market_open(et):
         return 0.0
     return (next_open(et) - et).total_seconds()
+
+
+def minutes_since_open(moment: datetime | None = None) -> float:
+    """Minutes elapsed since today's regular open (Eastern).
+
+    Negative before the open. Callers should only rely on this while the
+    market is open (see ``is_market_open``); it is used to gate entries during
+    the opening range.
+    """
+    et = _as_eastern(moment or now_eastern())
+    open_dt = et.replace(
+        hour=MARKET_OPEN.hour,
+        minute=MARKET_OPEN.minute,
+        second=0,
+        microsecond=0,
+    )
+    return (et - open_dt).total_seconds() / 60.0
+
+
+def in_opening_range(moment: datetime | None = None) -> bool:
+    """True during the first ``OPENING_RANGE_MINUTES`` of the regular session."""
+    return 0.0 <= minutes_since_open(moment) < OPENING_RANGE_MINUTES

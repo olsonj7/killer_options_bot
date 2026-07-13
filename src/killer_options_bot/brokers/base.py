@@ -36,6 +36,26 @@ class MarketData(Protocol):
         """
         ...
 
+    def get_intraday_bars(
+        self, symbol: str, interval: str = "15min"
+    ):
+        """Return the current session's intraday OHLC bars, oldest first.
+
+        Optional: like ``get_intraday_closes`` but preserves each bar's full
+        open/high/low/close range for price-action signals (STRAT bar typing,
+        displacement). Sources that cannot supply bars may omit this; the
+        scanner guards with ``getattr`` and such signals then decline.
+        """
+        ...
+
+    def get_daily_bars(self, symbol: str, lookback: int = 5):
+        """Return recent daily OHLC bars, oldest first (most recent last).
+
+        Optional: used for prior-day high/low (PDH/PDL) bias. Sources that
+        cannot supply bars may omit this; the scanner guards with ``getattr``.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class OrderResult:

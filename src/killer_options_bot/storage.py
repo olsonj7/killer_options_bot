@@ -465,6 +465,21 @@ class BaseStorage:
         )
         return bool(row and int(row["n"]) > 0)
 
+    def has_open_underlying(self, underlying: str) -> bool:
+        """True if ANY open position exists on this underlying symbol.
+
+        Used to enforce one live position per name: it blocks stacking multiple
+        strikes/sides on the same underlying (e.g. two SPY calls) and stops two
+        strategies from doubling up on a single symbol, which turns one weak
+        read into several correlated losses.
+        """
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM positions "
+            "WHERE status = ? AND underlying = ?",
+            (PositionStatus.OPEN.value, underlying),
+        )
+        return bool(row and int(row["n"]) > 0)
+
     def all_positions(self, limit: int = 100) -> list[PaperPosition]:
         rows = self._query_all(
             "SELECT * FROM positions ORDER BY id DESC LIMIT ?",

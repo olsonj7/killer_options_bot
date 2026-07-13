@@ -747,6 +747,7 @@ def run_loop(
         opened = 0
         scanned = []
         skipped = []
+        skipped_open_range = False
         for strategy in strategies:
             if now_mono < next_scan[strategy.name]:
                 continue
@@ -767,6 +768,18 @@ def run_loop(
                     continue
                 if not paper:
                     continue
+                # 0DTE opening-range guard: do not open same-day-expiry
+                # positions in the first 30 minutes of the session (the noisy,
+                # wide-spread opening range). Existing positions are still
+                # managed above; this only blocks NEW 0DTE entries. Bypassed
+                # when the trading clock is ignored (backtest/tests).
+                if (
+                    not ignore_market_hours
+                    and candidate.contract.dte(as_of) <= 0
+                    and market.in_opening_range()
+                ):
+                    skipped_open_range = True
+                    continue
                 position = engine.open_from_candidate(candidate)
                 if position is not None:
                     opened += 1
@@ -778,8 +791,9 @@ def run_loop(
                     )
         if scanned and opened == 0:
             extra = f" (skipped {skipped})" if skipped else ""
+            if skipped_open_range:
+                extra += " (0DTE opening-range guard active)"
             log(f"[{stamp}] scanned {scanned}: no new entries{extra}")
-
         cycles += 1
         if once:
             break

@@ -28,7 +28,7 @@ from datetime import date, timedelta
 from py_vollib.black_scholes import black_scholes
 from py_vollib.black_scholes.greeks.analytical import delta as bs_delta
 
-from killer_options_bot.models import OptionContract, Quote, Side
+from killer_options_bot.models import Bar, OptionContract, Quote, Side
 
 # Anchor month used to generate a stable ladder of monthly expirations.
 _ANCHOR = date(2026, 1, 15)
@@ -100,6 +100,73 @@ class MockMarketData:
             wobble = math.sin((seed % 17) + frac * 6.28) * (last * 0.004)
             out.append(round(max(0.5, last + drift + wobble), 2))
         return out
+
+    def get_intraday_bars(
+        self, symbol: str, interval: str = "15min"
+    ) -> list[Bar]:
+        """Synthetic intraday OHLC bars for the current session, oldest first.
+
+        Built from the same deterministic intraday close series as
+        ``get_intraday_closes`` so mock runs stay repeatable, then wrapped into
+        OHLC bars: each bar opens at the prior bar's close and carries a
+        high/low envelope around the open/close so bar ranges and STRAT typing
+        (inside / directional / outside bars) are well defined.
+        """
+        closes = self.get_intraday_closes(symbol, interval)
+        if not closes:
+            return []
+        seed = _seed(symbol)
+        bars: list[Bar] = []
+        prev_close = closes[0]
+        for i, close in enumerate(closes):
+            open_ = prev_close
+            # A per-bar wick size that varies but stays a small fraction of
+            # price, so most bars are directional 2-bars with the occasional
+            # inside/outside bar as the envelope expands or contracts.
+            wick = abs(math.sin((seed % 19) + i / 3.0)) * (close * 0.003) + 0.01
+            hi = max(open_, close) + wick
+            lo = min(open_, close) - wick
+            bars.append(
+                Bar(
+                    open=round(open_, 2),
+                    high=round(hi, 2),
+                    low=round(max(0.5, lo), 2),
+                    close=round(close, 2),
+                )
+            )
+            prev_close = close
+        return bars
+
+    def get_daily_bars(self, symbol: str, lookback: int = 5) -> list[Bar]:
+        """Synthetic recent daily OHLC bars, oldest first (most recent last).
+
+        Derived from the same deterministic daily price path as ``get_quote``.
+        The final bar is the most recently completed session, so the caller's
+        "previous day" is ``bars[-1]`` when scanning intraday.
+        """
+        lookback = max(1, int(lookback))
+        seed = _seed(symbol)
+        bars: list[Bar] = []
+        for back in range(lookback, 0, -1):
+            day = self.as_of - timedelta(days=back)
+            close = self._price_on(symbol, day)
+            prev = self._price_on(symbol, day - timedelta(days=1))
+            open_ = prev
+            # Daily wick ~1% of price, deterministic per day.
+            wick = abs(math.cos(seed + (day - _ANCHOR).days / 5.0)) * (
+                close * 0.01
+            ) + 0.05
+            hi = max(open_, close) + wick
+            lo = min(open_, close) - wick
+            bars.append(
+                Bar(
+                    open=round(open_, 2),
+                    high=round(hi, 2),
+                    low=round(max(0.5, lo), 2),
+                    close=round(close, 2),
+                )
+            )
+        return bars
 
     # --- Options -----------------------------------------------------------
 

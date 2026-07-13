@@ -47,6 +47,24 @@ def test_seconds_until_open_zero_when_open():
     )
 
 
+def test_minutes_since_open():
+    # 09:30 is exactly the open; 09:45 is 15 minutes in.
+    assert market.minutes_since_open(datetime(2026, 7, 8, 9, 30, tzinfo=ET)) == 0.0
+    assert market.minutes_since_open(datetime(2026, 7, 8, 9, 45, tzinfo=ET)) == 15.0
+    # Before the open is negative.
+    assert market.minutes_since_open(datetime(2026, 7, 8, 9, 20, tzinfo=ET)) == -10.0
+
+
+def test_in_opening_range_first_30_minutes():
+    # At the open and up to (not including) 10:00 is the opening range.
+    assert market.in_opening_range(datetime(2026, 7, 8, 9, 30, tzinfo=ET))
+    assert market.in_opening_range(datetime(2026, 7, 8, 9, 59, tzinfo=ET))
+    # 10:00 is exactly 30 minutes in -> no longer the opening range.
+    assert not market.in_opening_range(datetime(2026, 7, 8, 10, 0, tzinfo=ET))
+    # Before the open is not the opening range either.
+    assert not market.in_opening_range(datetime(2026, 7, 8, 9, 20, tzinfo=ET))
+
+
 def test_naive_datetime_treated_as_eastern():
     # A naive datetime should be interpreted as Eastern, not raise.
     assert market.is_market_open(datetime(2026, 7, 8, 10, 0))

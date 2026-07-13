@@ -84,6 +84,53 @@ def test_max_open_positions_enforced(tmp_path):
     assert engine.open_from_candidate(make_candidate(as_of)) is None
 
 
+def test_one_position_per_underlying(tmp_path):
+    # Even with slots free, a second position on the SAME underlying (different
+    # strike/side, different strategy) must be blocked. This stops correlated
+    # stacking (e.g. two SPY calls) that turns one weak read into many losses.
+    from killer_options_bot.config import RiskConfig
+
+    config = make_config(
+        tmp_path,
+        account_value=100000.0,
+        risk=RiskConfig(
+            max_trade_risk_pct=0.9,
+            max_open_positions=5,  # plenty of slots free
+            max_trades_per_week=50,
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    first = make_candidate(as_of)
+    assert engine.open_from_candidate(first) is not None
+
+    # A DIFFERENT AAPL contract (new symbol, different strike) — still blocked
+    # because a position on AAPL is already open.
+    other = Candidate(
+        contract=OptionContract(
+            symbol="AAPL260315C00160000",
+            underlying="AAPL",
+            side=Side.CALL,
+            strike=160.0,
+            expiration=as_of + timedelta(days=45),
+            bid=0.80,
+            ask=0.84,
+            last=0.82,
+            delta=0.30,
+            implied_volatility=0.30,
+            volume=500,
+            open_interest=2000,
+        ),
+        side=Side.CALL,
+        signal_note="test",
+        decision=RiskDecision.accept(),
+        max_loss=84.0,
+    )
+    assert engine.open_from_candidate(other) is None
+    assert engine.storage.count_open_positions() == 1
+
+
 def _position(as_of: date, entry_price: float) -> PaperPosition:
     return PaperPosition(
         option_symbol="X",

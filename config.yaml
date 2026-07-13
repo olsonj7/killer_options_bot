@@ -23,13 +23,18 @@ account_tiers:
     # 0DTE playbook on live Tradier data (PAPER ONLY - no real capital). 0DTE is
     # the highest-variance mode; keep it on paper until real results prove out.
     # SPY/QQQ have daily expirations, so 0DTE contracts are always available.
+    # NOTE: 'strat' (STRAT breakout) is implemented and tested but intentionally
+    # NOT active yet — adding a third entry source works against the current
+    # goal of FEWER, higher-quality trades. Enable it once default/zerodte prove
+    # out with the new pickiness gates.
     strategies: [default, zerodte]
     risk:
       max_trade_risk_pct: 0.30
-      # Raised 2 -> 4 so the 0DTE (zerodte) strategy gets its own slots and
-      # isn't starved by `default` filling the cap first. Positions are tagged
-      # by strategy, so 0DTE results can still be isolated in the P/L review.
-      max_open_positions: 4
+      # Two concurrent slots max on the smallest account. Combined with the
+      # one-position-per-underlying rule, this keeps the book small and stops
+      # correlated stacking (e.g. multiple SPY calls) that turns one weak read
+      # into several losses at once.
+      max_open_positions: 2
     contract_filters:
       min_delta: 0.20
       max_delta: 0.35
@@ -106,6 +111,33 @@ strategies:
           fraction: 0.5
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
+  strat:
+    # Price-action day trade distilled from TheSTRAT / smart-money course:
+    # enter on a directional STRAT "2" bar (breaks the prior bar's high/low)
+    # that shows displacement (an impulse-sized range) and aligns with the
+    # prior-day high/low bias. Uses the 'strat_breakout' signal on OHLC bars.
+    signal: strat_breakout
+    # Intraday breakout: re-check for a fresh trigger every few minutes.
+    scan_interval_minutes: 5
+    contract_filters:
+      # Short-dated so a same-session directional move pays; 0-2 DTE.
+      min_dte: 0
+      max_dte: 2
+      # Enough delta to actually move on an intraday break.
+      min_delta: 0.40
+      max_delta: 0.60
+      max_spread_pct: 0.18
+    exits:
+      # Directional day trade: take a solid move, cut a failed break quickly.
+      profit_target_pct: 0.50
+      stop_loss_pct: 0.40
+      # Day-trade horizon: exit same day, carry to next session at most.
+      max_holding_days: 1
+      min_dte_exit: 0
+      # Bank into strength and leave a runner for a trend day.
+      trims:
+        - at_pct: 0.30   # +30%: sell half
+          fraction: 0.5
   swing:
     # Multi-day directional trades. Longer expiries give the move room to
     # develop, so a wider stop and a multi-day hold, exiting before theta bites.
@@ -171,8 +203,10 @@ risk:
   max_trade_risk_pct: 0.30
   # Max simultaneous open positions (enforced in paper/live phases).
   max_open_positions: 3
-  # Max new trades logged per calendar week.
-  max_trades_per_week: 10
+  # Max new trades logged per calendar week. Lowered 10 -> 6 to force selection:
+  # with a weekly budget the bot must save its entries for the best setups
+  # rather than firing on every marginal signal.
+  max_trades_per_week: 6
 
 contract_filters:
   # Weekly / short-dated horizon for a small-account challenge.
@@ -194,14 +228,31 @@ signal:
   # Simple momentum gate. A call needs price above SMA and RSI in band.
   sma_period: 20
   rsi_period: 14
-  rsi_min: 45
+  # Tighter RSI band (was 45): a call now needs RSI >= 50, i.e. real strength
+  # rather than a barely-positive drift. Puts still require RSI < this floor.
+  rsi_min: 50
   rsi_max: 70
+  # Quality gates that make entries far pickier (both signals use these):
+  #  - price must sit at least this fraction BEYOND the SMA, not just on the
+  #    right side of it, so noise around the mean does not trigger a trade.
+  #  - the SMA must be sloping the trade's way over slope_lookback bars, so we
+  #    only buy calls in a rising trend and puts in a falling one.
+  trend_buffer_pct: 0.004   # 0.4% beyond the SMA
+  slope_lookback: 3
   # Intraday-signal settings, used by the 'intraday_momentum' signal (0DTE).
   # Bars come from Tradier timesales at this interval; shorter SMA/RSI periods
   # let a same-day trend register early (9-period on 5min bars ~= 45 min in).
   intraday_interval: 5min   # one of: 1min, 5min, 15min
   intraday_sma_period: 9
   intraday_rsi_period: 9
+  # STRAT breakout settings, used by the 'strat_breakout' signal. Bars are
+  # OHLC (Tradier timesales) at strat_interval. A directional "2" bar triggers
+  # only when its range clears strat_displacement_mult x the average range of
+  # the prior strat_atr_period bars (an impulse), and the break aligns with the
+  # prior-day high/low bias.
+  strat_interval: 15min      # one of: 1min, 5min, 15min
+  strat_displacement_mult: 1.5
+  strat_atr_period: 10
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.

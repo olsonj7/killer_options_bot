@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import requests
 
 from killer_options_bot.brokers.base import OrderResult
-from killer_options_bot.models import OptionContract, Quote, Side
+from killer_options_bot.models import Bar, OptionContract, Quote, Side
 
 
 class TradierError(RuntimeError):
@@ -124,6 +124,86 @@ class TradierMarketData:
             if price is not None:
                 closes.append(float(price))
         return closes
+
+    def get_intraday_bars(
+        self, symbol: str, interval: str = "15min"
+    ) -> list[Bar]:
+        """Intraday OHLC bars for today's session, oldest first.
+
+        Same Tradier ``/markets/timesales`` source as ``get_intraday_closes``
+        but keeps each bar's full open/high/low/close so price-action signals
+        (STRAT bar typing, displacement) have real ranges to work with. Returns
+        an empty list before the open or if the series is unavailable.
+        """
+        from killer_options_bot.market import EASTERN
+
+        now = datetime.now(EASTERN)
+        start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        if now < start:
+            return []
+        data = self._get(
+            "/markets/timesales",
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "start": start.strftime("%Y-%m-%d %H:%M"),
+                "end": now.strftime("%Y-%m-%d %H:%M"),
+                "session_filter": "open",
+            },
+        )
+        node = ((data.get("series") or {}) or {}).get("data") or []
+        if isinstance(node, dict):
+            node = [node]
+        return self._bars_from_nodes(node)
+
+    def get_daily_bars(self, symbol: str, lookback: int = 5) -> list[Bar]:
+        """Recent daily OHLC bars, oldest first (most recent last).
+
+        Uses Tradier ``/markets/history`` (daily interval) and returns the last
+        ``lookback`` completed sessions. Used for prior-day high/low bias.
+        """
+        lookback = max(1, int(lookback))
+        end = date.today()
+        # Pad the window generously so weekends/holidays don't starve the count.
+        start = end - timedelta(days=lookback * 3 + 10)
+        hist = self._get(
+            "/markets/history",
+            {
+                "symbol": symbol,
+                "interval": "daily",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            },
+        )
+        days = ((hist.get("history") or {}) or {}).get("day") or []
+        if isinstance(days, dict):
+            days = [days]
+        bars = self._bars_from_nodes(days)
+        return bars[-lookback:]
+
+    @staticmethod
+    def _bars_from_nodes(nodes: list) -> list[Bar]:
+        """Convert Tradier OHLC nodes into ``Bar`` objects, skipping bad rows."""
+        bars: list[Bar] = []
+        for n in nodes:
+            try:
+                o = n.get("open")
+                h = n.get("high")
+                low = n.get("low")
+                c = n.get("close")
+                if None in (o, h, low, c):
+                    continue
+                bars.append(
+                    Bar(
+                        open=float(o),
+                        high=float(h),
+                        low=float(low),
+                        close=float(c),
+                    )
+                )
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return bars
 
     def _expirations(self, symbol: str) -> list[date]:
         data = self._get(

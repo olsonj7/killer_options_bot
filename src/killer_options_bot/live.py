@@ -151,8 +151,10 @@ class LiveEngine:
 
         if self.storage.count_open_positions() >= self.config.risk.max_open_positions:
             return LiveOpenResult(False, "max open positions reached")
-        if self.storage.has_open_position(candidate.contract.symbol):
-            return LiveOpenResult(False, "already holding this contract")
+        # One position per underlying: no stacking strikes/sides on a name, and
+        # no second strategy doubling up on it (correlated-loss protection).
+        if self.storage.has_open_underlying(candidate.contract.underlying):
+            return LiveOpenResult(False, "already holding this underlying")
 
         c = candidate.contract
         # Limit at the ask for a marketable-but-capped buy. Never a market order.
