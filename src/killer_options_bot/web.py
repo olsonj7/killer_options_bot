@@ -707,6 +707,7 @@ def _render_page(
                 f"<tr><td>{html.escape(p.option_symbol)}</td>"
                 f"<td>{html.escape(p.underlying)}</td>"
                 f"<td>{html.escape(p.side.value.upper())}</td>"
+                f"<td>{p.strike:g}</td>"
                 f"<td>{qty_txt}</td>"
                 f"<td>{_fmt_money(p.entry_price)}</td>"
                 f"<td>-</td><td>-</td>"
@@ -732,6 +733,7 @@ def _render_page(
             f"<tr><td>{html.escape(p.option_symbol)}</td>"
             f"<td>{html.escape(p.underlying)}</td>"
             f"<td>{html.escape(p.side.value.upper())}</td>"
+            f"<td>{p.strike:g}</td>"
             f"<td>{qty_txt}</td>"
             f"<td>{_fmt_money(p.entry_price)}</td>"
             f"<td>{_fmt_money(price)}</td>"
@@ -780,7 +782,7 @@ def _render_page(
     )
     pos_body = (
         "".join(pos_rows)
-        or "<tr><td colspan='11' class='muted'>No open positions.</td></tr>"
+        or "<tr><td colspan='12' class='muted'>No open positions.</td></tr>"
     )
     cand_body = (
         "".join(cand_rows)
@@ -936,7 +938,7 @@ def _render_page(
 
   <h2 style="font-size:15px;">Open positions</h2>
   <table>
-    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Qty</th><th>Entry</th>
+    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Strike</th><th>Qty</th><th>Entry</th>
         <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Mode</th></tr>
     {pos_body}
   </table>
