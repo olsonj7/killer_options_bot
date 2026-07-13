@@ -147,6 +147,60 @@ def test_strategy_pl_bars_empty_when_no_trades():
     assert _render_strategy_pl_bars([]) == ""
 
 
+def _candidate(symbol, strike, decision):
+    from killer_options_bot.models import Candidate, OptionContract, RiskDecision, Side
+
+    return Candidate(
+        contract=OptionContract(
+            symbol=symbol,
+            underlying="SPY",
+            side=Side.CALL,
+            strike=strike,
+            expiration=date(2026, 1, 16),
+            bid=1.50,
+            ask=1.54,
+            last=1.52,
+            delta=0.35,
+            implied_volatility=0.30,
+            volume=1000,
+            open_interest=2000,
+        ),
+        side=Side.CALL,
+        signal_note="test",
+        decision=decision,
+        max_loss=154.0,
+    )
+
+
+def test_dashboard_candidate_three_state_verdict(tmp_path):
+    from killer_options_bot.models import RiskDecision
+
+    config_path = _write_config(tmp_path)
+    storage = Storage(str(tmp_path / "web.db"))
+
+    # REJECT: failed risk.
+    storage.record_candidate(
+        _candidate("SPY260116C00760000", 760.0, RiskDecision.reject("bad spread"))
+    )
+    # ALLOW: passed risk, no downstream block recorded.
+    storage.record_candidate(
+        _candidate("SPY260116C00755000", 755.0, RiskDecision.accept())
+    )
+    # BLOCKED: passed risk but blocked at open (annotated afterwards).
+    cid = storage.record_candidate(
+        _candidate("SPY260116C00759000", 759.0, RiskDecision.accept())
+    )
+    storage.mark_candidate_blocked(cid, "blocked: already holding SPY")
+
+    dash = Dashboard(config_path, source="mock")
+    html = dash.render()
+    assert ">REJECT<" in html
+    assert ">ALLOW<" in html
+    assert ">BLOCKED<" in html
+    assert "already holding SPY" in html
+    assert "Scanned" in html  # scan-time column header
+
+
 def test_config_page_renders_current_values(tmp_path):
     config_path = _write_config(tmp_path, account_value=12345.0)
     dash = Dashboard(config_path, source="mock")

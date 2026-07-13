@@ -354,8 +354,8 @@ class Scanner:
             max_loss=risk.max_loss(contract),
             strategy=strategy.name,
         )
-        self.storage.record_candidate(candidate)
-        return candidate
+        candidate_id = self.storage.record_candidate(candidate)
+        return replace(candidate, id=candidate_id)
 
     def scan_symbol(self, symbol: str) -> Candidate | None:
         """Scan a symbol under the first active strategy (compat helper)."""

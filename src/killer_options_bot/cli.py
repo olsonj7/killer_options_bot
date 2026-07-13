@@ -779,6 +779,11 @@ def run_loop(
                     and market.in_opening_range()
                 ):
                     skipped_open_range = True
+                    if candidate.id is not None:
+                        storage.mark_candidate_blocked(
+                            candidate.id,
+                            "blocked: 0DTE opening-range guard (first 30 min)",
+                        )
                     continue
                 position = engine.open_from_candidate(candidate)
                 if position is not None:

@@ -312,6 +312,20 @@ class BaseStorage:
             (limit,),
         )
 
+    def mark_candidate_blocked(self, candidate_id: int, reason: str) -> None:
+        """Record why a risk-allowed candidate was not actually opened.
+
+        The candidate row is logged at scan time with the risk verdict; a trade
+        can still be blocked downstream (already holding the underlying, max
+        open positions, opening-range guard). Writing that reason back onto the
+        row lets the dashboard show a truthful "blocked" verdict instead of a
+        misleading "ALLOW" for a trade that never opened.
+        """
+        self._execute(
+            "UPDATE candidates SET reasons = ? WHERE id = ?",
+            (reason, candidate_id),
+        )
+
     # --- Positions ---------------------------------------------------------
 
     @staticmethod

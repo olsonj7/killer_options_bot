@@ -97,6 +97,15 @@ class PaperEngine:
 
     # --- Opening -----------------------------------------------------------
 
+    def _note_blocked(self, candidate: Candidate, reason: str) -> None:
+        """Annotate the candidate row when a guardrail blocks the open.
+
+        No-op when the candidate has no DB id (e.g. constructed in a test or a
+        code path that didn't persist it), so callers never need to guard.
+        """
+        if candidate.id is not None:
+            self.storage.mark_candidate_blocked(candidate.id, reason)
+
     def open_from_candidate(
         self, candidate: Candidate, quantity: int | None = None
     ) -> PaperPosition | None:
@@ -110,11 +119,15 @@ class PaperEngine:
         if not candidate.decision.allowed:
             return None
         if self.storage.count_open_positions() >= self.config.risk.max_open_positions:
+            self._note_blocked(candidate, "max open positions reached")
             return None
         # One position per underlying: never stack multiple strikes/sides on the
         # same name, and never let a second strategy double up on it. This turns
         # off the correlated-loss stacking that a single weak read would cause.
         if self.storage.has_open_underlying(candidate.contract.underlying):
+            self._note_blocked(
+                candidate, f"blocked: already holding {candidate.contract.underlying}"
+            )
             return None
 
         c = candidate.contract

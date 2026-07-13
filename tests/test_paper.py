@@ -131,6 +131,39 @@ def test_one_position_per_underlying(tmp_path):
     assert engine.storage.count_open_positions() == 1
 
 
+def test_blocked_candidate_is_annotated(tmp_path):
+    # When a risk-allowed candidate is blocked at open (already holding the
+    # underlying), the persisted candidate row should record why, so the
+    # dashboard can show a truthful "blocked" verdict instead of "ALLOW".
+    from killer_options_bot.config import RiskConfig
+    from dataclasses import replace
+
+    config = make_config(
+        tmp_path,
+        account_value=100000.0,
+        risk=RiskConfig(
+            max_trade_risk_pct=0.9,
+            max_open_positions=5,
+            max_trades_per_week=50,
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of), storage, as_of=as_of)
+
+    assert engine.open_from_candidate(make_candidate(as_of)) is not None
+
+    # A second AAPL candidate, recorded so it has a DB id, then blocked.
+    second = make_candidate(as_of)
+    cid = storage.record_candidate(second)
+    second = replace(second, id=cid)
+    assert engine.open_from_candidate(second) is None
+
+    row = next(r for r in storage.recent_candidates(limit=10) if r["id"] == cid)
+    assert row["allowed"] == 1
+    assert "already holding AAPL" in (row["reasons"] or "")
+
+
 def _position(as_of: date, entry_price: float) -> PaperPosition:
     return PaperPosition(
         option_symbol="X",

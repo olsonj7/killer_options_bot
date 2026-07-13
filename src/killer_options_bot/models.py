@@ -180,6 +180,9 @@ class Candidate:
     max_loss: float
     strategy: str = "default"
     created_at: datetime = field(default_factory=datetime.utcnow)
+    #: DB row id, set after the candidate is recorded. Lets the open step
+    #: annotate this exact row when a downstream guardrail blocks the trade.
+    id: int | None = None
 
 
 class PositionStatus(str, Enum):

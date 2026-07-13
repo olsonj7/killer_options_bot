@@ -219,6 +219,25 @@ def _fmt_money(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def _fmt_scan_time(raw: str | None) -> str:
+    """Format a candidate's ``created_at`` (UTC ISO string) as market time.
+
+    Candidates are stamped with ``datetime.utcnow()`` at scan time. Convert to
+    US/Eastern (the market clock) and show a compact ``MM-DD HH:MM`` so it's
+    obvious when a scan ran. Returns ``-`` if the value is missing/unparseable.
+    """
+    if not raw:
+        return "-"
+    from killer_options_bot.market import EASTERN
+
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return "-"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(EASTERN).strftime("%m-%d %H:%M ET")
+
 def _equity_curve_svg(
     closed: list[PaperPosition], unrealized: float | None = None
 ) -> str:
@@ -733,11 +752,20 @@ def _render_page(
     # Recent candidates.
     cand_rows = []
     for r in storage.recent_candidates(limit=15):
-        verdict = "ALLOW" if r["allowed"] else "REJECT"
-        vcls = "pos" if r["allowed"] else "neg"
         reasons = html.escape(r["reasons"] or "")
+        # Three-state verdict: REJECT (failed risk), BLOCKED (passed risk but a
+        # guardrail stopped the open, e.g. already holding the underlying), or
+        # ALLOW (passed and opened). A risk-allowed row with a reason recorded
+        # means it was blocked downstream, so it is not a real ALLOW.
+        if not r["allowed"]:
+            verdict, vcls = "REJECT", "neg"
+        elif r["reasons"]:
+            verdict, vcls = "BLOCKED", "amber"
+        else:
+            verdict, vcls = "ALLOW", "pos"
         cand_rows.append(
-            f"<tr><td class='{vcls}'>{verdict}</td>"
+            f"<tr><td class='reasons'>{_fmt_scan_time(r.get('created_at'))}</td>"
+            f"<td class='{vcls}'>{verdict}</td>"
             f"<td>{html.escape(r['underlying'])}</td>"
             f"<td>{html.escape(r['side'].upper())}</td>"
             f"<td>{r['strike']:g}</td>"
@@ -756,7 +784,7 @@ def _render_page(
     )
     cand_body = (
         "".join(cand_rows)
-        or "<tr><td colspan='8' class='muted'>No candidates logged yet.</td></tr>"
+        or "<tr><td colspan='9' class='muted'>No candidates logged yet.</td></tr>"
     )
     max_risk = config.account_value * config.risk.max_trade_risk_pct
     equity_svg = _equity_curve_svg(closed, unrealized=unrealized)
@@ -796,6 +824,7 @@ def _render_page(
   th {{ color: #8b949e; font-weight: 600; background: #12161c; }}
   .pos {{ color: #3fb950; }}
   .neg {{ color: #f85149; }}
+  .amber {{ color: #d29922; }}
   .muted {{ color: #8b949e; text-align: center; }}
   .reasons {{ color: #8b949e; font-size: 12px; }}
   .actions {{ display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }}
@@ -916,7 +945,7 @@ def _render_page(
 
   <h2 style="font-size:15px;">Recent candidates</h2>
   <table>
-    <tr><th>Verdict</th><th>Underlying</th><th>Side</th><th>Strike</th>
+    <tr><th>Scanned</th><th>Verdict</th><th>Underlying</th><th>Side</th><th>Strike</th>
         <th>DTE</th><th>Mid</th><th>Cost</th><th>Reasons</th></tr>
     {cand_body}
   </table>
