@@ -461,6 +461,73 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
 """
 
 
+def _render_strategy_pl_bars(closed: list[PaperPosition]) -> str:
+    """Render a horizontal bar chart of realized P/L per strategy.
+
+    One bar per strategy, drawn from a central zero axis: green to the right
+    for net-positive strategies, red to the left for net-negative ones, so you
+    can see at a glance which method is carrying (or dragging) the account.
+    Uses inline SVG only, matching the equity-curve style (no dependencies).
+    """
+    by_strategy: dict[str, float] = {}
+    for p in closed:
+        pl = p.realized_pl()
+        if pl is None:
+            continue
+        name = p.strategy or "default"
+        by_strategy[name] = by_strategy.get(name, 0.0) + pl
+
+    if not by_strategy:
+        return ""
+
+    # Largest strategies (by absolute P/L) first for a stable, readable order.
+    items = sorted(by_strategy.items(), key=lambda kv: kv[1], reverse=True)
+    magnitude = max((abs(v) for _, v in items), default=0.0) or 1.0
+
+    w, row_h, pad_x, pad_top = 1040, 30, 120, 14
+    label_w = 96  # left gutter for the strategy name
+    axis_x = label_w + (w - label_w - pad_x) / 2  # centre (zero) line
+    half = (w - label_w - pad_x) / 2  # pixels available each side of zero
+    h = pad_top + row_h * len(items) + 10
+
+    bars: list[str] = []
+    for i, (name, pl) in enumerate(items):
+        cy = pad_top + row_h * i + row_h / 2
+        bar_len = (abs(pl) / magnitude) * half
+        color = "#3fb950" if pl >= 0 else "#f85149"
+        if pl >= 0:
+            bx = axis_x
+        else:
+            bx = axis_x - bar_len
+        bar_h = 14
+        # Value label sits just past the outer end of the bar.
+        if pl >= 0:
+            tx, anchor = axis_x + bar_len + 6, "start"
+        else:
+            tx, anchor = axis_x - bar_len - 6, "end"
+        bars.append(
+            f"<text x='{label_w - 10}' y='{cy + 4:.1f}' fill='#c9d1d9' "
+            f"font-size='12' text-anchor='end'>{html.escape(name)}</text>"
+            f"<rect x='{bx:.1f}' y='{cy - bar_h / 2:.1f}' width='{bar_len:.1f}' "
+            f"height='{bar_h}' rx='2' fill='{color}'/>"
+            f"<text x='{tx:.1f}' y='{cy + 4:.1f}' fill='{color}' "
+            f"font-size='11' text-anchor='{anchor}'>{_fmt_money(pl)}</text>"
+        )
+
+    svg = (
+        f"<svg viewBox='0 0 {w} {h}' width='100%' height='{h}' "
+        f"role='img' aria-label='Realized P/L by strategy'>"
+        f"<line x1='{axis_x:.1f}' y1='{pad_top - 4}' x2='{axis_x:.1f}' "
+        f"y2='{h - 6}' stroke='#30363d'/>"
+        f"{''.join(bars)}"
+        f"</svg>"
+    )
+    return f"""
+  <h2 style="font-size:15px;">Realized P/L by strategy</h2>
+  <div class="chart">{svg}</div>
+"""
+
+
 def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
     """Table of individual past (closed) trades, most recent first."""
     if not closed:
@@ -696,6 +763,7 @@ def _render_page(
 
     withdraw_html = _render_withdraw_section(config, storage)
     stats_html = _render_stats_section(closed)
+    strategy_pl_html = _render_strategy_pl_bars(closed)
     closed_html = _render_closed_trades(closed)
     status_html = _render_status_banner(storage)
     toggles_html = _render_strategy_toggles(config, storage)
@@ -832,6 +900,8 @@ def _render_page(
   <div class="chart">{equity_svg}</div>
 
   {stats_html}
+
+  {strategy_pl_html}
 
   {withdraw_html}
 

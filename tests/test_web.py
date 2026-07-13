@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import yaml
 
-from killer_options_bot.web import Dashboard, _equity_curve_svg
+from killer_options_bot.web import Dashboard, _equity_curve_svg, _render_strategy_pl_bars
 from killer_options_bot.storage import Storage
 from killer_options_bot.models import PaperPosition, PositionStatus, Side
 from datetime import date
@@ -79,7 +79,7 @@ def test_equity_curve_needs_two_points():
     assert "Not enough closed trades" in _equity_curve_svg([])
 
 
-def _closed(symbol, entry, exit_, epx, xpx):
+def _closed(symbol, entry, exit_, epx, xpx, strategy="default"):
     return PaperPosition(
         option_symbol=symbol,
         underlying="AAPL",
@@ -93,6 +93,7 @@ def _closed(symbol, entry, exit_, epx, xpx):
         exit_price=xpx,
         exit_date=exit_,
         exit_reason="test",
+        strategy=strategy,
     )
 
 
@@ -126,6 +127,24 @@ def test_equity_curve_single_closed_plus_unrealized():
     svg = _equity_curve_svg(trades, unrealized=-10.0)
     assert "<svg" in svg
 
+
+def test_strategy_pl_bars_render_per_strategy():
+    trades = [
+        _closed("A", date(2026, 1, 1), date(2026, 1, 5), 1.0, 1.5, "default"),
+        _closed("B", date(2026, 1, 2), date(2026, 1, 8), 2.0, 1.0, "zerodte"),
+        _closed("C", date(2026, 1, 3), date(2026, 1, 9), 1.0, 1.4, "zerodte"),
+    ]
+    svg = _render_strategy_pl_bars(trades)
+    assert "<svg" in svg
+    assert "Realized P/L by strategy" in svg
+    # One labelled bar per distinct strategy.
+    assert "default" in svg
+    assert "zerodte" in svg
+    assert svg.count("<rect") == 2
+
+
+def test_strategy_pl_bars_empty_when_no_trades():
+    assert _render_strategy_pl_bars([]) == ""
 
 
 def test_config_page_renders_current_values(tmp_path):
