@@ -147,6 +147,34 @@ def test_strategy_pl_bars_empty_when_no_trades():
     assert _render_strategy_pl_bars([]) == ""
 
 
+def test_closed_trade_qty_and_trim_flag():
+    from killer_options_bot.web import _closed_qty_cell
+
+    # A full close of a 2-lot: just the count, no trim flag.
+    full = PaperPosition(
+        option_symbol="SPY", underlying="SPY", side=Side.CALL, strike=500.0,
+        expiration=date(2026, 1, 9), quantity=2, entry_price=1.0,
+        entry_date=date(2026, 1, 2), status=PositionStatus.CLOSED,
+        exit_price=1.5, exit_date=date(2026, 1, 9), exit_reason="target",
+        original_quantity=2, trims_done=0,
+    )
+    cell = _closed_qty_cell(full)
+    assert cell == "2"
+
+    # Opened 2, trimmed 1, ran 1: shows the scale-out breakdown.
+    trimmed = PaperPosition(
+        option_symbol="SPY", underlying="SPY", side=Side.CALL, strike=500.0,
+        expiration=date(2026, 1, 9), quantity=1, entry_price=1.0,
+        entry_date=date(2026, 1, 2), status=PositionStatus.CLOSED,
+        exit_price=1.8, exit_date=date(2026, 1, 9), exit_reason="runner",
+        original_quantity=2, trims_done=1, realized_pl_banked=25.0,
+    )
+    cell = _closed_qty_cell(trimmed)
+    assert "2" in cell
+    assert "trimmed 1" in cell
+    assert "ran 1" in cell
+
+
 def _candidate(symbol, strike, decision):
     from killer_options_bot.models import Candidate, OptionContract, RiskDecision, Side
 
