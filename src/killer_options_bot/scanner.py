@@ -299,6 +299,14 @@ class Scanner:
         The strategy's own filters/exits drive contract selection and risk, so
         a 0DTE scalp and a LEAPS hold evaluate independently on the same name.
         """
+        # One position per underlying: if we already hold this name, there is
+        # nothing actionable to scan for -- a new candidate could only be
+        # blocked at open. Skip early so we neither log noise (a wall of
+        # "already holding" rows) nor spend a chain fetch on it. Exit
+        # management for the open position runs separately every tick.
+        if self.storage.has_open_underlying(symbol):
+            return None
+
         # A per-strategy view of the config so RiskEngine and contract picking
         # use this strategy's DTE/delta window instead of the base one.
         scfg = replace(self.config, filters=strategy.filters, exits=strategy.exits)
