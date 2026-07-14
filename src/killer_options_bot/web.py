@@ -570,7 +570,7 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
     """Table of individual past (closed) trades, most recent first."""
     if not closed:
         body = (
-            "<tr><td colspan='9' class='muted'>No closed trades yet.</td></tr>"
+            "<tr><td colspan='10' class='muted'>No closed trades yet.</td></tr>"
         )
     else:
         # closed_positions() returns oldest-first by id; show newest first.
@@ -586,6 +586,7 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
             rows.append(
                 f"<tr><td>{html.escape(p.underlying)}</td>"
                 f"<td>{html.escape(p.side.value.upper())} {p.strike:g}</td>"
+                f"<td>{p.expiration.isoformat()}</td>"
                 f"<td>{_closed_qty_cell(p)}</td>"
                 f"<td>{html.escape(p.strategy or 'default')}</td>"
                 f"<td>{p.entry_date.isoformat()}</td>"
@@ -599,7 +600,7 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
     return f"""
   <h2 style="font-size:15px;">Closed trades</h2>
   <table>
-    <tr><th>Underlying</th><th>Contract</th><th>Qty</th><th>Strategy</th><th>Opened</th>
+    <tr><th>Underlying</th><th>Contract</th><th>Expires</th><th>Qty</th><th>Strategy</th><th>Opened</th>
         <th>Closed</th><th>Entry &rarr; Exit</th><th>Realized P/L</th>
         <th>Reason</th></tr>
     {body}
