@@ -896,10 +896,20 @@ def _render_page(
   // current without a manual reload. Skips reloading while a form control is
   // focused (editing strategy toggles) or the tab is hidden, so it never
   // interrupts an interaction or hammers the server in the background.
+  //
+  // Action feedback (the flash banner) is server-side and consumed on first
+  // render, so a blind auto-refresh would wipe it before it could be read.
+  // When a flash is present we hold off reloading, keep it visible for a few
+  // seconds, then dismiss it and let live refresh resume.
   (function () {{
     var INTERVAL_MS = 30000;
+    var flash = document.querySelector('.flash');
+    if (flash) {{
+      setTimeout(function () {{ flash.remove(); }}, 12000);
+    }}
     setInterval(function () {{
       if (document.hidden) return;
+      if (document.querySelector('.flash')) return;
       var el = document.activeElement;
       if (el && /^(INPUT|BUTTON|SELECT|TEXTAREA)$/.test(el.tagName)) return;
       window.location.reload();
@@ -919,14 +929,8 @@ def _render_page(
   {flash_html}
   {status_html}
   <div class="actions">
-    <form method="post" action="/scan-paper">
-      <button type="submit">Scan &amp; open paper trades</button>
-    </form>
-    <form method="post" action="/scan">
-      <button class="secondary" type="submit">Scan only</button>
-    </form>
     <form method="post" action="/manage">
-      <button class="secondary" type="submit">Manage exits</button>
+      <button type="submit">Manage exits</button>
     </form>
     <a class="nav" href="/export.csv" style="align-self:center;">Export CSV</a>
   </div>
