@@ -220,15 +220,33 @@ class Dashboard:
         return summary + "."
 
     def render_config(self, flash: str = "") -> str:
+        # _context() already applies DB overrides to produce the effective
+        # Config object; derive form values from it so we don't need a second
+        # Supabase connection just to render the config page.
+        config, _storage, _data, _engine = self._context()
         raw = self._load_raw_config()
-        # Apply DB overrides so the form shows effective (not just YAML) values.
-        base_config = load_config(self.config_path)
-        storage = get_storage(base_config)
-        for (section, key), value_str in storage.get_config_overrides().items():
-            try:
-                raw.setdefault(section, {})[key] = float(value_str)
-            except (ValueError, TypeError):
-                pass
+        # Overlay effective values so the form shows what the bot is using.
+        raw.setdefault("account", {})["value"] = config.account_value
+        raw.setdefault("risk", {}).update({
+            "max_trade_risk_pct": config.risk.max_trade_risk_pct,
+            "max_open_positions": config.risk.max_open_positions,
+            "max_trades_per_week": config.risk.max_trades_per_week,
+        })
+        raw.setdefault("contract_filters", {}).update({
+            "min_dte": config.filters.min_dte,
+            "max_dte": config.filters.max_dte,
+            "min_delta": config.filters.min_delta,
+            "max_delta": config.filters.max_delta,
+            "max_spread_pct": config.filters.max_spread_pct,
+            "min_volume": config.filters.min_volume,
+            "min_open_interest": config.filters.min_open_interest,
+        })
+        raw.setdefault("exits", {}).update({
+            "profit_target_pct": config.exits.profit_target_pct,
+            "stop_loss_pct": config.exits.stop_loss_pct,
+            "max_holding_days": config.exits.max_holding_days,
+            "min_dte_exit": config.exits.min_dte_exit,
+        })
         return _render_config_page(raw, self.source, flash)
 
     # --- Rendering ---------------------------------------------------------

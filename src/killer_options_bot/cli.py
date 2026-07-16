@@ -725,6 +725,21 @@ def run_loop(
 
         _heartbeat("scanning")
         as_of = date.today()
+
+        # Reload config each tick so DB overrides (edits made via the /config
+        # page) take effect immediately without a Railway redeploy. Failure is
+        # non-fatal: the previous config keeps the loop alive.
+        try:
+            _ov = storage.get_config_overrides()
+            if _ov:
+                config = load_config(config_path, _ov)
+                # Activate any strategies that were added by the new config.
+                for _s in config.active_strategies:
+                    next_scan.setdefault(_s.name, 0.0)
+                strategies = list(config.active_strategies)
+        except Exception:
+            pass
+
         data = _build_data_source(source, config, as_of=None)
         engine = PaperEngine(
             config, data, storage, as_of=as_of, cost_model=config.cost_model()

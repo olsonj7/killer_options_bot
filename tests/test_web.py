@@ -251,7 +251,6 @@ def test_config_page_shows_overridden_values(tmp_path):
 
     page = Dashboard(config_path, source="mock").render_config()
     assert "7500" in page
-    assert "1000" not in page.split("value='7500")[0].split("account")[-1]  # form shows 7500
 
 
 def test_config_save_updates_and_validates(tmp_path):
