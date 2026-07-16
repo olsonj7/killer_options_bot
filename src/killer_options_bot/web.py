@@ -82,8 +82,6 @@ EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
 # Form field names are prefixed: "strategy.<name>.<section>.<key>".
 STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("limits", "max_trades_per_day", "Max trades / day (0 = unlimited)", "int", 0, 50),
-    ("contract_filters", "min_dte", "Min DTE", "int", 0, 365),
-    ("contract_filters", "max_dte", "Max DTE", "int", 1, 730),
     ("contract_filters", "min_delta", "Min delta", "float", 0.0, 1.0),
     ("contract_filters", "max_delta", "Max delta", "float", 0.0, 1.0),
     ("contract_filters", "max_spread_pct", "Max spread (fraction)", "float", 0.0, 1.0),
