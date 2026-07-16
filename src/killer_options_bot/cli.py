@@ -731,8 +731,9 @@ def run_loop(
         # non-fatal: the previous config keeps the loop alive.
         try:
             _ov = storage.get_config_overrides()
-            if _ov:
-                config = load_config(config_path, _ov)
+            _sov = storage.get_strategy_config_overrides()
+            if _ov or _sov:
+                config = load_config(config_path, _ov or None, _sov or None)
                 # Activate any strategies that were added by the new config.
                 for _s in config.active_strategies:
                     next_scan.setdefault(_s.name, 0.0)

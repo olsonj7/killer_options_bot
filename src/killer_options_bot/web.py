@@ -72,6 +72,20 @@ EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("exits", "min_dte_exit", "Min DTE exit", "int", 0, 365),
 ]
 
+# Per-strategy editable fields (contract_filters + exits).
+# Form field names are prefixed: "strategy.<name>.<section>.<key>".
+STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
+    ("contract_filters", "min_dte", "Min DTE", "int", 0, 365),
+    ("contract_filters", "max_dte", "Max DTE", "int", 1, 730),
+    ("contract_filters", "min_delta", "Min delta", "float", 0.0, 1.0),
+    ("contract_filters", "max_delta", "Max delta", "float", 0.0, 1.0),
+    ("contract_filters", "max_spread_pct", "Max spread (fraction)", "float", 0.0, 1.0),
+    ("exits", "profit_target_pct", "Profit target (fraction)", "float", 0.01, 10.0),
+    ("exits", "stop_loss_pct", "Stop loss (fraction)", "float", 0.01, 1.0),
+    ("exits", "max_holding_days", "Max holding days", "int", 0, 365),
+    ("exits", "min_dte_exit", "Min DTE exit", "int", 0, 365),
+]
+
 
 class Dashboard:
     """Gathers data and runs actions for the web UI."""
@@ -84,7 +98,8 @@ class Dashboard:
         base_config = load_config(self.config_path)
         storage = get_storage(base_config)
         overrides = storage.get_config_overrides()
-        config = load_config(self.config_path, overrides) if overrides else base_config
+        strat_overrides = storage.get_strategy_config_overrides()
+        config = load_config(self.config_path, overrides or None, strat_overrides or None)
         data = _build_data_source(self.source, config)
         engine = PaperEngine(config, data, storage, cost_model=config.cost_model())
         return config, storage, data, engine
@@ -153,6 +168,7 @@ class Dashboard:
                 pass
 
         to_save: list[tuple[str, str, int | float]] = []
+        strat_to_save: list[tuple[str, str, str, int | float]] = []
         errors: list[str] = []
 
         for section, key, label, kind, lo, hi in EDITABLE_FIELDS:
@@ -174,7 +190,30 @@ class Dashboard:
             raw.setdefault(section, {})[key] = value
             to_save.append((section, key, value))
 
-        # Cross-field sanity checks.
+        # Per-strategy fields: form key = "strategy.<name>.<section>.<key>"
+        existing_strat = storage.get_strategy_config_overrides()
+        non_default = [s for s in base_config.active_strategies if s.name != "default"]
+        for strat in non_default:
+            for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
+                field_name = f"strategy.{strat.name}.{section}.{key}"
+                values = form.get(field_name)
+                if not values:
+                    continue
+                text = values[0].strip()
+                if text == "":
+                    continue
+                try:
+                    sval: int | float = int(text) if kind == "int" else float(text)
+                except ValueError:
+                    errors.append(f"{strat.name} {label}: not a number")
+                    continue
+                if not (lo <= sval <= hi):
+                    errors.append(f"{strat.name} {label}: must be between {lo:g} and {hi:g}")
+                    continue
+                raw.setdefault("strategies", {}).setdefault(strat.name, {}).setdefault(section, {})[key] = sval
+                strat_to_save.append((strat.name, section, key, sval))
+
+        # Cross-field sanity checks on base.
         cf = raw.get("contract_filters", {})
         if cf.get("min_dte", 0) > cf.get("max_dte", 0):
             errors.append("Min DTE must be <= Max DTE")
@@ -188,15 +227,21 @@ class Dashboard:
         new_overrides = dict(existing)
         for section, key, value in to_save:
             new_overrides[(section, key)] = str(value)
+        new_strat_overrides = dict(existing_strat)
+        for strat_name, section, key, value in strat_to_save:
+            new_strat_overrides[(strat_name, section, key)] = str(value)
         try:
-            load_config(self.config_path, new_overrides)
+            load_config(self.config_path, new_overrides, new_strat_overrides)
         except Exception as exc:
             return f"Config rejected (validation failed): {exc}"
 
         for section, key, value in to_save:
             storage.set_config_override(section, key, value)
+        for strat_name, section, key, value in strat_to_save:
+            storage.set_strategy_config_override(strat_name, section, key, value)
 
-        return f"Config saved: {len(to_save)} field(s) updated."
+        total = len(to_save) + len(strat_to_save)
+        return f"Config saved: {total} field(s) updated."
 
     def set_strategies(self, form: dict[str, list[str]]) -> str:
         """Persist which strategies are enabled from the checkbox form.
@@ -220,12 +265,11 @@ class Dashboard:
         return summary + "."
 
     def render_config(self, flash: str = "") -> str:
-        # _context() already applies DB overrides to produce the effective
-        # Config object; derive form values from it so we don't need a second
-        # Supabase connection just to render the config page.
+        # _context() applies all DB overrides; use it as the single source of
+        # truth for what the bot is currently running with.
         config, _storage, _data, _engine = self._context()
         raw = self._load_raw_config()
-        # Overlay effective values so the form shows what the bot is using.
+        # Overlay effective base values so the form shows what the bot uses.
         raw.setdefault("account", {})["value"] = config.account_value
         raw.setdefault("risk", {}).update({
             "max_trade_risk_pct": config.risk.max_trade_risk_pct,
@@ -247,7 +291,7 @@ class Dashboard:
             "max_holding_days": config.exits.max_holding_days,
             "min_dte_exit": config.exits.min_dte_exit,
         })
-        return _render_config_page(raw, self.source, flash)
+        return _render_config_page(raw, self.source, flash, config.active_strategies)
 
     # --- Rendering ---------------------------------------------------------
 
@@ -1053,7 +1097,12 @@ def _shared_css() -> str:
 """
 
 
-def _render_config_page(raw: dict, source: str, flash: str) -> str:
+def _render_config_page(
+    raw: dict,
+    source: str,
+    flash: str,
+    active_strategies: tuple | None = None,
+) -> str:
     flash_html = (
         f"<div class='flash'>{html.escape(flash)}</div>" if flash else ""
     )
@@ -1061,7 +1110,15 @@ def _render_config_page(raw: dict, source: str, flash: str) -> str:
     last_section = None
     for section, key, label, kind, lo, hi in EDITABLE_FIELDS:
         if section != last_section:
-            rows.append(f"<div class='section'>{html.escape(section)}</div>")
+            label_map = {
+                "account": "Account (applies to all strategies)",
+                "risk": "Risk (applies to all strategies)",
+                "contract_filters": "default — contract filters",
+                "exits": "default — exits",
+            }
+            rows.append(
+                f"<div class='section'>{html.escape(label_map.get(section, section))}</div>"
+            )
             last_section = section
         current = (raw.get(section, {}) or {}).get(key, "")
         step = "1" if kind == "int" else "any"
@@ -1073,6 +1130,35 @@ def _render_config_page(raw: dict, source: str, flash: str) -> str:
             f"value='{html.escape(str(current))}' "
             f"min='{lo:g}' max='{hi:g}'></div>"
         )
+
+    # Per-strategy sections for all non-default active strategies.
+    for strat in (active_strategies or ()):
+        if strat.name == "default":
+            continue
+        last_section = None
+        for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
+            if section != last_section:
+                rows.append(
+                    f"<div class='section'>{html.escape(strat.name)} &mdash; "
+                    f"{html.escape(section.replace('_', ' '))}</div>"
+                )
+                last_section = section
+            # Effective value from the StrategyConfig object.
+            if section == "contract_filters":
+                current = getattr(strat.filters, key, "")
+            else:
+                current = getattr(strat.exits, key, "")
+            field_id = f"strategy.{strat.name}.{section}.{key}"
+            step = "1" if kind == "int" else "any"
+            rows.append(
+                f"<div class='field'>"
+                f"<label for='{field_id}'>{html.escape(label)}</label>"
+                f"<input type='number' step='{step}' "
+                f"id='{field_id}' name='{field_id}' "
+                f"value='{html.escape(str(current))}' "
+                f"min='{lo:g}' max='{hi:g}'></div>"
+            )
+
     fields_html = "".join(rows)
 
     return f"""<!doctype html>

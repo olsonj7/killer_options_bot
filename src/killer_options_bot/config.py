@@ -374,13 +374,15 @@ _VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout"}
 def load_config(
     path: str | Path,
     overrides: dict[tuple[str, str], str] | None = None,
+    strategy_overrides: dict[tuple[str, str, str], str] | None = None,
 ) -> Config:
     """Load and validate configuration from YAML + environment.
 
-    ``overrides`` is an optional ``{(section, key): str_value}`` mapping
-    (produced by ``Storage.get_config_overrides``) that is layered on top of
-    the YAML baseline before parsing.  This lets the /config web UI save edits
-    to Supabase so they survive container redeploys without touching the file.
+    ``overrides`` is an optional ``{(section, key): str_value}`` mapping for
+    base config fields (account, risk, contract_filters, exits).
+    ``strategy_overrides`` is an optional ``{(strategy, section, key): str_value}``
+    mapping for per-strategy fields. Both are produced by Storage methods and
+    let the /config web UI persist edits to Supabase so they survive redeploys.
     """
     load_dotenv()
 
@@ -396,6 +398,15 @@ def load_config(
         for (section, key), value_str in overrides.items():
             try:
                 raw.setdefault(section, {})[key] = float(value_str)
+            except (ValueError, TypeError):
+                pass
+
+    # Layer per-strategy overrides into raw['strategies'][name][section][key].
+    if strategy_overrides:
+        for (strat_name, section, key), value_str in strategy_overrides.items():
+            try:
+                strat_raw = raw.setdefault("strategies", {}).setdefault(strat_name, {})
+                strat_raw.setdefault(section, {})[key] = float(value_str)
             except (ValueError, TypeError):
                 pass
 

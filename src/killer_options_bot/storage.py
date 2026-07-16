@@ -257,7 +257,7 @@ class BaseStorage:
         self.set_state(f"{self._CONFIG_NS}{section}.{key}", str(value))
 
     def get_config_overrides(self) -> dict[tuple[str, str], str]:
-        """Return all config overrides as {(section, key): str_value}.
+        """Return all base config overrides as {(section, key): str_value}.
 
         Reads all runtime_state rows and filters in Python (avoids LIKE with
         ``%`` which some Postgres drivers treat as a placeholder character).
@@ -266,11 +266,34 @@ class BaseStorage:
         result: dict[tuple[str, str], str] = {}
         for row in rows:
             k: str = row["key"]
-            if k.startswith(self._CONFIG_NS):
+            if k.startswith(self._CONFIG_NS) and ":strategy:" not in k:
                 field = k[len(self._CONFIG_NS):]
                 parts = field.split(".", 1)
                 if len(parts) == 2:
                     result[(parts[0], parts[1])] = row["value"]
+        return result
+
+    def set_strategy_config_override(
+        self, strategy: str, section: str, key: str, value: float | int
+    ) -> None:
+        """Persist a per-strategy config field edit to the DB."""
+        self.set_state(
+            f"{self._CONFIG_NS}strategy:{strategy}.{section}.{key}", str(value)
+        )
+
+    def get_strategy_config_overrides(self) -> dict[tuple[str, str, str], str]:
+        """Return strategy-scoped overrides as {(strategy, section, key): str_value}."""
+        rows = self._query_all("SELECT key, value FROM runtime_state", ())
+        result: dict[tuple[str, str, str], str] = {}
+        prefix = f"{self._CONFIG_NS}strategy:"
+        for row in rows:
+            k: str = row["key"]
+            if k.startswith(prefix):
+                rest = k[len(prefix):]
+                # format: "zerodte.contract_filters.min_delta"
+                parts = rest.split(".", 2)
+                if len(parts) == 3:
+                    result[(parts[0], parts[1], parts[2])] = row["value"]
         return result
 
     # --- Candidates --------------------------------------------------------
