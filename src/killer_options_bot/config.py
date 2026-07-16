@@ -156,6 +156,9 @@ class StrategyConfig:
     #: only paces entries, so a 0DTE scalp can scan every minute while LEAPS
     #: only look once a day.
     scan_interval_minutes: int = 5
+    #: Maximum positions this strategy may open in a single calendar day.
+    #: 0 means unlimited. Used to cap 0DTE overtrading.
+    max_trades_per_day: int = 0
 
 
 @dataclass(frozen=True)
@@ -347,12 +350,38 @@ def _build_trims(raw_trims) -> tuple[TrimRule, ...]:
 
 
 def _build_exits(d: dict) -> ExitConfig:
+    # Trim ladder: the UI stores trims as flat keys ``trim_N_at_pct`` /
+    # ``trim_N_fraction`` in the exits dict (so they flow through the normal
+    # override mechanism). When any such keys exist they REPLACE the YAML
+    # ``trims`` list so an edit in /config always wins over the file.
+    flat_at: dict[int, float] = {}
+    flat_frac: dict[int, float] = {}
+    for k, v in d.items():
+        if k.startswith("trim_") and k.endswith("_at_pct"):
+            try:
+                flat_at[int(k[5:-7])] = float(v)
+            except (ValueError, IndexError):
+                pass
+        elif k.startswith("trim_") and k.endswith("_fraction"):
+            try:
+                flat_frac[int(k[5:-9])] = float(v)
+            except (ValueError, IndexError):
+                pass
+    if flat_at or flat_frac:
+        override_trims = [
+            {"at_pct": flat_at[i], "fraction": flat_frac[i]}
+            for i in sorted(set(flat_at) | set(flat_frac))
+            if flat_at.get(i, 0) > 0 and flat_frac.get(i, 0) > 0
+        ]
+        trims = _build_trims(override_trims)
+    else:
+        trims = _build_trims(d.get("trims", []))
     cfg = ExitConfig(
         profit_target_pct=float(d.get("profit_target_pct", 0.35)),
         stop_loss_pct=float(d.get("stop_loss_pct", 0.45)),
         max_holding_days=int(d.get("max_holding_days", 21)),
         min_dte_exit=int(d.get("min_dte_exit", 21)),
-        trims=_build_trims(d.get("trims", [])),
+        trims=trims,
         trail_pct=float(d.get("trail_pct", 0.0)),
         trail_activate_pct=float(d.get("trail_activate_pct", 0.0)),
     )
@@ -509,6 +538,11 @@ def load_config(
                     "scan_interval_minutes", 5
                 )
             ),
+            max_trades_per_day=int(
+                ((raw.get("strategies", {}) or {}).get("default") or {}).get(
+                    "limits", {}
+                ).get("max_trades_per_day", 0)
+            ),
         )
     }
     for name, prof in (raw.get("strategies", {}) or {}).items():
@@ -526,6 +560,9 @@ def load_config(
             raise ValueError(
                 f"strategy '{name}' scan_interval_minutes must be positive"
             )
+        max_trades_per_day = int(
+            (prof.get("limits") or {}).get("max_trades_per_day", 0)
+        )
         registry[name] = StrategyConfig(
             name=name,
             signal=sig,
@@ -534,6 +571,7 @@ def load_config(
             ),
             exits=_build_exits(_overlay(exits, prof.get("exits", {}))),
             scan_interval_minutes=interval,
+            max_trades_per_day=max_trades_per_day,
         )
 
     if tier and tier.get("strategies") is not None:

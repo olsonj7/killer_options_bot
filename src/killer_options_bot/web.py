@@ -70,11 +70,18 @@ EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("exits", "stop_loss_pct", "Stop loss (fraction)", "float", 0.01, 1.0),
     ("exits", "max_holding_days", "Max holding days", "int", 1, 365),
     ("exits", "min_dte_exit", "Min DTE exit", "int", 0, 365),
+    ("exits", "trim_0_at_pct", "Trim 1 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_0_fraction", "Trim 1 — sell this fraction", "float", 0.0, 0.99),
+    ("exits", "trim_1_at_pct", "Trim 2 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_1_fraction", "Trim 2 — sell this fraction", "float", 0.0, 0.99),
+    ("exits", "trim_2_at_pct", "Trim 3 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_2_fraction", "Trim 3 — sell this fraction", "float", 0.0, 0.99),
 ]
 
-# Per-strategy editable fields (contract_filters + exits).
+# Per-strategy editable fields (contract_filters + exits + limits).
 # Form field names are prefixed: "strategy.<name>.<section>.<key>".
 STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
+    ("limits", "max_trades_per_day", "Max trades / day (0 = unlimited)", "int", 0, 50),
     ("contract_filters", "min_dte", "Min DTE", "int", 0, 365),
     ("contract_filters", "max_dte", "Max DTE", "int", 1, 730),
     ("contract_filters", "min_delta", "Min delta", "float", 0.0, 1.0),
@@ -84,6 +91,12 @@ STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("exits", "stop_loss_pct", "Stop loss (fraction)", "float", 0.01, 1.0),
     ("exits", "max_holding_days", "Max holding days", "int", 0, 365),
     ("exits", "min_dte_exit", "Min DTE exit", "int", 0, 365),
+    ("exits", "trim_0_at_pct", "Trim 1 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_0_fraction", "Trim 1 — sell this fraction", "float", 0.0, 0.99),
+    ("exits", "trim_1_at_pct", "Trim 2 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_1_fraction", "Trim 2 — sell this fraction", "float", 0.0, 0.99),
+    ("exits", "trim_2_at_pct", "Trim 3 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
+    ("exits", "trim_2_fraction", "Trim 3 — sell this fraction", "float", 0.0, 0.99),
 ]
 
 
@@ -219,6 +232,20 @@ class Dashboard:
             errors.append("Min DTE must be <= Max DTE")
         if cf.get("min_delta", 0) > cf.get("max_delta", 0):
             errors.append("Min delta must be <= Max delta")
+        # Trim ladder sanity: fractions must sum to < 1.
+        for ctx, exits_dict in [("default", raw.get("exits", {}))] + [
+            (n, (raw.get("strategies", {}) or {}).get(n, {}).get("exits", {}))
+            for n in {s for s, _, _ in strat_to_save}
+        ]:
+            total_frac = sum(
+                float(exits_dict.get(f"trim_{i}_fraction", 0) or 0)
+                for i in range(3)
+            )
+            if total_frac >= 1.0:
+                errors.append(
+                    f"{ctx} trims: sell fractions sum to {total_frac:.2f} — "
+                    "must be < 1 so a runner stays"
+                )
 
         if errors:
             return "Config not saved. " + "; ".join(errors)
@@ -285,12 +312,17 @@ class Dashboard:
             "min_volume": config.filters.min_volume,
             "min_open_interest": config.filters.min_open_interest,
         })
-        raw.setdefault("exits", {}).update({
+        exits_raw = raw.setdefault("exits", {})
+        exits_raw.update({
             "profit_target_pct": config.exits.profit_target_pct,
             "stop_loss_pct": config.exits.stop_loss_pct,
             "max_holding_days": config.exits.max_holding_days,
             "min_dte_exit": config.exits.min_dte_exit,
         })
+        # Expand the default strategy's trim ladder into flat keys.
+        for i, trim in enumerate(config.exits.trims):
+            exits_raw[f"trim_{i}_at_pct"] = trim.at_pct
+            exits_raw[f"trim_{i}_fraction"] = trim.fraction
         return _render_config_page(raw, self.source, flash, config.active_strategies)
 
     # --- Rendering ---------------------------------------------------------
@@ -1115,6 +1147,7 @@ def _config_fields_html(
         "exits": "Exits",
         "account": "Account",
         "risk": "Risk",
+        "limits": "Limits",
     }
     for section, key, label, kind, lo, hi in fields:
         if section != last_section:
@@ -1182,12 +1215,25 @@ def _render_config_page(
         prefix = f"strategy.{strat.name}."
 
         def _strat_val(section: str, key: str, _s=strat) -> str:
-            if section == "contract_filters":
-                return str(getattr(_s.filters, key, ""))
-            return str(getattr(_s.exits, key, ""))
+            if section == "limits":
+                return str(getattr(_s, key, 0))
+            if section == "exits":
+                if key.startswith("trim_") and key.endswith("_at_pct"):
+                    try:
+                        idx = int(key[5:-7])
+                        return str(_s.exits.trims[idx].at_pct) if idx < len(_s.exits.trims) else "0"
+                    except (ValueError, IndexError):
+                        return "0"
+                if key.startswith("trim_") and key.endswith("_fraction"):
+                    try:
+                        idx = int(key[5:-9]); return str(_s.exits.trims[idx].fraction) if idx < len(_s.exits.trims) else "0"
+                    except (ValueError, IndexError):
+                        return "0"
+                return str(getattr(_s.exits, key, ""))
+            return str(getattr(_s.filters, key, ""))
 
         content = _config_fields_html(STRATEGY_EDITABLE_FIELDS, _strat_val, prefix)
-        display_name = strat.name.replace("zerodte", "0DTE").replace("_", " ").title()
+        display_name = strat.name.replace("_", " ").title().replace("Zerodte", "0DTE")
         strat_tabs_nav += (
             f"<button type='button' class='tab-btn' "
             f"data-tab='tab-{tab_id}' onclick='switchTab(this)'>"

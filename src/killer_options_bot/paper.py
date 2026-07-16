@@ -121,6 +121,22 @@ class PaperEngine:
         if self.storage.count_open_positions() >= self.config.risk.max_open_positions:
             self._note_blocked(candidate, "max open positions reached")
             return None
+
+        # Per-strategy daily trade limit (0 = unlimited).
+        strat_cfg = next(
+            (s for s in self.config.active_strategies
+             if s.name == (candidate.strategy or "default")),
+            None,
+        )
+        if strat_cfg and strat_cfg.max_trades_per_day > 0:
+            as_of = self.as_of or date.today()
+            if self.storage.trades_today_for_strategy(candidate.strategy, as_of) >= strat_cfg.max_trades_per_day:
+                self._note_blocked(
+                    candidate,
+                    f"daily limit ({strat_cfg.max_trades_per_day}) reached "
+                    f"for {candidate.strategy}",
+                )
+                return None
         # One position per (strategy, underlying): never stack multiple
         # strikes/sides on the same name within a strategy. Different
         # strategies may hold the same underlying on different timeframes

@@ -296,6 +296,15 @@ class BaseStorage:
                     result[(parts[0], parts[1], parts[2])] = row["value"]
         return result
 
+    def trades_today_for_strategy(self, strategy: str, as_of: "date") -> int:
+        """Count positions opened today by the given strategy (open + closed)."""
+        row = self._query_one(
+            "SELECT COUNT(*) AS n FROM positions "
+            "WHERE strategy = ? AND entry_date = ?",
+            (strategy, as_of.isoformat()),
+        )
+        return int(row["n"]) if row else 0
+
     # --- Candidates --------------------------------------------------------
 
     def record_candidate(self, candidate: Candidate) -> int:
