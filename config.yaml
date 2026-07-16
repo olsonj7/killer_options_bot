@@ -27,7 +27,7 @@ account_tiers:
     # NOT active yet — adding a third entry source works against the current
     # goal of FEWER, higher-quality trades. Enable it once default/zerodte prove
     # out with the new pickiness gates.
-    strategies: [default, zerodte]
+    strategies: [default, zerodte, reversal_0dte]
     risk:
       max_trade_risk_pct: 0.30
       # Two concurrent slots max on the smallest account. Combined with the
@@ -111,6 +111,37 @@ strategies:
           fraction: 0.5
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
+    limits:
+      # No new 0DTE momentum entries during the low-volume midday chop window.
+      # Toggle in the config UI; off by default so you can enable as needed.
+      skip_midday: false
+  reversal_0dte:
+    # Same-day mean-reversion fade: RSI overbought/oversold extremes snap back
+    # during consolidation. Opposite of zerodte momentum — fires when RSI is
+    # BEYOND the band (> rsi_max = overbought → PUT; < rsi_min = oversold → CALL).
+    signal: intraday_reversal
+    scan_interval_minutes: 2
+    contract_filters:
+      min_dte: 0
+      max_dte: 1
+      min_delta: 0.35
+      max_delta: 0.55
+      max_spread_pct: 0.18
+    exits:
+      # Small target: in consolidation moves are short. Take 25% and get out.
+      profit_target_pct: 0.25
+      # Cut fast on failed reversals — a fade that keeps going is brutal.
+      stop_loss_pct: 0.25
+      max_holding_days: 0
+      min_dte_exit: 0
+      trims:
+        - at_pct: 0.15   # +15%: sell half early
+          fraction: 0.5
+    limits:
+      max_trades_per_day: 2
+      # Reversal is specifically a morning/afternoon-end play.
+      # Midday noise is the enemy of fades — skip it.
+      skip_midday: true
   strat:
     # Price-action day trade distilled from TheSTRAT / smart-money course:
     # enter on a directional STRAT "2" bar (breaks the prior bar's high/low)

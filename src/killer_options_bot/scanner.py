@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config, StrategyConfig
@@ -138,6 +139,49 @@ def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
     )
 
 
+def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
+    """RSI mean-reversion fade for 0DTE range-bound sessions.
+
+    Fires the OPPOSITE direction of ``intraday_momentum``:
+
+    - RSI overbought (> rsi_max) + price extended above SMA → buy PUT
+      (fade the high, expect snap-back to the mean)
+    - RSI oversold (< rsi_min) + price extended below SMA → buy CALL
+      (bounce candidate)
+
+    Useful during consolidation days when momentum strategies chop and
+    intraday extremes consistently snap back to VWAP / SMA.
+    """
+    s = cfg.signal
+    bars = quote.intraday
+    ma = sma(bars, s.intraday_sma_period)
+    r = rsi(bars, s.intraday_rsi_period)
+    if ma is None or r is None:
+        return Signal(
+            None, f"Insufficient intraday history ({len(bars)} bars)"
+        )
+    price = bars[-1]
+    upper = ma * (1 + s.trend_buffer_pct)
+    lower = ma * (1 - s.trend_buffer_pct)
+    if price > upper and r > s.rsi_max:
+        return Signal(
+            Side.PUT,
+            f"Reversal fade bearish: {price:.2f} > SMA{s.intraday_sma_period} "
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f}",
+        )
+    if price < lower and r < s.rsi_min:
+        return Signal(
+            Side.CALL,
+            f"Reversal bounce bullish: {price:.2f} < SMA{s.intraday_sma_period} "
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f}",
+        )
+    return Signal(
+        None,
+        f"No reversal edge: {price:.2f} vs SMA{s.intraday_sma_period} "
+        f"{ma:.2f}, RSI {r:.1f}",
+    )
+
+
 def strat_bar_type(bar: Bar, prev: Bar) -> str:
     """Classify ``bar`` relative to ``prev`` using TheSTRAT bar taxonomy.
 
@@ -265,10 +309,11 @@ _SIGNALS = {
     "momentum": momentum_signal,
     "intraday_momentum": intraday_momentum_signal,
     "strat_breakout": strat_breakout_signal,
+    "intraday_reversal": intraday_reversal_signal,
 }
 
 #: Signals that need the current session's intraday bar CLOSES on the quote.
-_INTRADAY_SIGNALS = {"intraday_momentum"}
+_INTRADAY_SIGNALS = {"intraday_momentum", "intraday_reversal"}
 
 #: Signals that need OHLC bars (intraday + prior-day) attached to the quote.
 _BAR_SIGNALS = {"strat_breakout"}
@@ -308,6 +353,14 @@ class Scanner:
         # versa). Exit management for open positions runs separately every tick.
         if self.storage.has_open_underlying(symbol, strategy.name):
             return None
+
+        # Skip the low-volume midday chop window (noon–2 pm ET) when the
+        # strategy has skip_midday enabled. Exit management is unaffected;
+        # only new entries are suppressed during this window.
+        if strategy.skip_midday:
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            if 12 <= now_et.hour < 14:
+                return None
 
         # A per-strategy view of the config so RiskEngine and contract picking
         # use this strategy's DTE/delta window instead of the base one.

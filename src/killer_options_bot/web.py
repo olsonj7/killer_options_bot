@@ -82,6 +82,7 @@ EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
 # Form field names are prefixed: "strategy.<name>.<section>.<key>".
 STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("limits", "max_trades_per_day", "Max trades / day (0 = unlimited)", "int", 0, 50),
+    ("limits", "skip_midday", "Skip midday 12pm\u20132pm ET", "bool", 0, 1),
     ("contract_filters", "min_delta", "Min delta", "float", 0.0, 1.0),
     ("contract_filters", "max_delta", "Max delta", "float", 0.0, 1.0),
     ("contract_filters", "max_spread_pct", "Max spread (fraction)", "float", 0.0, 1.0),
@@ -205,6 +206,14 @@ class Dashboard:
         for strat in non_default:
             for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
                 field_name = f"strategy.{strat.name}.{section}.{key}"
+                if kind == "bool":
+                    # Checkboxes: present with value="true" when checked, absent when unchecked.
+                    # We must always write a value so an uncheck is preserved.
+                    sval_bool: bool = bool(form.get(field_name))
+                    sval_str = "true" if sval_bool else "false"
+                    raw.setdefault("strategies", {}).setdefault(strat.name, {}).setdefault(section, {})[key] = sval_bool
+                    strat_to_save.append((strat.name, section, key, sval_str))
+                    continue
                 values = form.get(field_name)
                 if not values:
                     continue
@@ -231,7 +240,7 @@ class Dashboard:
         # Trim ladder sanity: fractions must sum to < 1.
         for ctx, exits_dict in [("default", raw.get("exits", {}))] + [
             (n, (raw.get("strategies", {}) or {}).get(n, {}).get("exits", {}))
-            for n in {s for s, _, _ in strat_to_save}
+            for n in {s for s, _, _, _ in strat_to_save}
         ]:
             total_frac = sum(
                 float(exits_dict.get(f"trim_{i}_fraction", 0) or 0)
@@ -1155,15 +1164,25 @@ def _config_fields_html(
             last_section = section
         current = raw_section_getter(section, key)
         field_id = f"{prefix}{section}.{key}"
-        step = "1" if kind == "int" else "any"
-        rows.append(
-            f"<div class='field'>"
-            f"<label for='{field_id}'>{html.escape(label)}</label>"
-            f"<input type='number' step='{step}' id='{field_id}' "
-            f"name='{field_id}' value='{html.escape(str(current))}' "
-            f"min='{lo:g}' max='{hi:g}'>"
-            f"</div>"
-        )
+        if kind == "bool":
+            checked = "checked" if str(current).lower() in ("true", "1", "yes") else ""
+            rows.append(
+                f"<div class='field'>"
+                f"<label for='{field_id}'>{html.escape(label)}</label>"
+                f"<input type='checkbox' id='{field_id}' "
+                f"name='{field_id}' value='true' {checked}>"
+                f"</div>"
+            )
+        else:
+            step = "1" if kind == "int" else "any"
+            rows.append(
+                f"<div class='field'>"
+                f"<label for='{field_id}'>{html.escape(label)}</label>"
+                f"<input type='number' step='{step}' id='{field_id}' "
+                f"name='{field_id}' value='{html.escape(str(current))}' "
+                f"min='{lo:g}' max='{hi:g}'>"
+                f"</div>"
+            )
     return "".join(rows)
 
 
@@ -1229,7 +1248,7 @@ def _render_config_page(
             return str(getattr(_s.filters, key, ""))
 
         content = _config_fields_html(STRATEGY_EDITABLE_FIELDS, _strat_val, prefix)
-        display_name = strat.name.replace("_", " ").title().replace("Zerodte", "0DTE")
+        display_name = strat.name.replace("_", " ").title().replace("Zerodte", "0DTE").replace("0Dte", "0DTE")
         strat_tabs_nav += (
             f"<button type='button' class='tab-btn' "
             f"data-tab='tab-{tab_id}' onclick='switchTab(this)'>"

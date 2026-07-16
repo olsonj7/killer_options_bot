@@ -159,6 +159,10 @@ class StrategyConfig:
     #: Maximum positions this strategy may open in a single calendar day.
     #: 0 means unlimited. Used to cap 0DTE overtrading.
     max_trades_per_day: int = 0
+    #: When True, no new entries are opened between noon and 2 pm ET — the
+    #: low-volume chop window where both momentum and reversal signals are
+    #: noisiest. Exit management still runs; only entries are suppressed.
+    skip_midday: bool = False
 
 
 @dataclass(frozen=True)
@@ -396,7 +400,7 @@ def _build_exits(d: dict) -> ExitConfig:
     return cfg
 
 
-_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout"}
+_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout", "intraday_reversal"}
 
 
 
@@ -433,11 +437,16 @@ def load_config(
     # Layer per-strategy overrides into raw['strategies'][name][section][key].
     if strategy_overrides:
         for (strat_name, section, key), value_str in strategy_overrides.items():
-            try:
-                strat_raw = raw.setdefault("strategies", {}).setdefault(strat_name, {})
-                strat_raw.setdefault(section, {})[key] = float(value_str)
-            except (ValueError, TypeError):
-                pass
+            strat_raw = raw.setdefault("strategies", {}).setdefault(strat_name, {})
+            if key == "skip_midday":
+                strat_raw.setdefault(section, {})[key] = (
+                    value_str.lower() in ("true", "1", "yes")
+                )
+            else:
+                try:
+                    strat_raw.setdefault(section, {})[key] = float(value_str)
+                except (ValueError, TypeError):
+                    pass
 
     account = raw.get("account", {})
     mode = raw.get("mode", {})
@@ -563,6 +572,7 @@ def load_config(
         max_trades_per_day = int(
             (prof.get("limits") or {}).get("max_trades_per_day", 0)
         )
+        skip_midday = bool((prof.get("limits") or {}).get("skip_midday", False))
         registry[name] = StrategyConfig(
             name=name,
             signal=sig,
@@ -572,6 +582,7 @@ def load_config(
             exits=_build_exits(_overlay(exits, prof.get("exits", {}))),
             scan_interval_minutes=interval,
             max_trades_per_day=max_trades_per_day,
+            skip_midday=skip_midday,
         )
 
     if tier and tier.get("strategies") is not None:
