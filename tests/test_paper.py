@@ -85,9 +85,10 @@ def test_max_open_positions_enforced(tmp_path):
 
 
 def test_one_position_per_underlying(tmp_path):
-    # Even with slots free, a second position on the SAME underlying (different
-    # strike/side, different strategy) must be blocked. This stops correlated
-    # stacking (e.g. two SPY calls) that turns one weak read into many losses.
+    # Even with slots free, a second position on the SAME underlying under the
+    # SAME strategy (different strike/side) must be blocked. This stops
+    # correlated stacking (e.g. two SPY calls) that turns one weak read into
+    # many losses.
     from killer_options_bot.config import RiskConfig
 
     config = make_config(
@@ -129,6 +130,51 @@ def test_one_position_per_underlying(tmp_path):
     )
     assert engine.open_from_candidate(other) is None
     assert engine.storage.count_open_positions() == 1
+
+
+def test_other_strategy_may_hold_same_underlying(tmp_path):
+    # The per-underlying block is scoped to the strategy: a weekly (default)
+    # AAPL hold must NOT block a 0DTE-style strategy from opening its own AAPL
+    # position, and vice versa. Different timeframes are independent trades.
+    from dataclasses import replace
+
+    from killer_options_bot.config import RiskConfig
+
+    config = make_config(
+        tmp_path,
+        account_value=100000.0,
+        risk=RiskConfig(
+            max_trade_risk_pct=0.9,
+            max_open_positions=5,
+            max_trades_per_week=50,
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    first = make_candidate(as_of)  # strategy "default"
+    assert engine.open_from_candidate(first) is not None
+
+    # Same underlying, different contract, DIFFERENT strategy -> allowed.
+    other = replace(
+        first,
+        contract=replace(
+            first.contract,
+            symbol="AAPL260315C00160000",
+            strike=160.0,
+        ),
+        strategy="zerodte",
+    )
+    assert engine.open_from_candidate(other) is not None
+    assert engine.storage.count_open_positions() == 2
+
+    # But the SAME strategy stacking on the name is still blocked.
+    third = replace(
+        other,
+        contract=replace(other.contract, symbol="AAPL260315C00165000", strike=165.0),
+    )
+    assert engine.open_from_candidate(third) is None
+    assert engine.storage.count_open_positions() == 2
 
 
 def test_blocked_candidate_is_annotated(tmp_path):

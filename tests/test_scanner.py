@@ -69,3 +69,40 @@ def test_scan_skips_held_underlying(tmp_path):
     # Scanning the held name is skipped entirely: no candidate, nothing logged.
     assert scanner.scan_symbol_strategy("AAPL", strategy) is None
     assert storage.recent_candidates(limit=100) == []
+
+
+def test_scan_not_skipped_for_other_strategy(tmp_path):
+    # The held-underlying skip is per (strategy, underlying): a position opened
+    # by ANOTHER strategy must not hide an opportunity for this one (e.g. a
+    # weekly swing hold should not suppress a 0DTE scalp on the same name).
+    from datetime import timedelta
+
+    from killer_options_bot.models import PaperPosition, PositionStatus, Side
+
+    config = make_config(tmp_path, watchlist=["SPY"])
+    as_of = date(2026, 1, 1)
+    data = MockMarketData(as_of=as_of)
+    storage = Storage(config.db_path)
+    scanner = Scanner(config, data, storage, as_of=as_of)
+    strategy = config.active_strategies[0]  # "default"
+
+    # SPY held by a DIFFERENT strategy.
+    storage.open_position(
+        PaperPosition(
+            option_symbol="SPY260206C00370000",
+            underlying="SPY",
+            side=Side.CALL,
+            strike=370.0,
+            expiration=as_of + timedelta(days=1),
+            quantity=1,
+            entry_price=1.0,
+            entry_date=as_of,
+            status=PositionStatus.OPEN,
+            strategy="zerodte",
+        )
+    )
+
+    # The default strategy still scans SPY and produces its candidate.
+    candidate = scanner.scan_symbol_strategy("SPY", strategy)
+    assert candidate is not None
+    assert candidate.contract.underlying == "SPY"

@@ -479,19 +479,28 @@ class BaseStorage:
         )
         return bool(row and int(row["n"]) > 0)
 
-    def has_open_underlying(self, underlying: str) -> bool:
-        """True if ANY open position exists on this underlying symbol.
+    def has_open_underlying(self, underlying: str, strategy: str | None = None) -> bool:
+        """True if an open position exists on this underlying symbol.
 
-        Used to enforce one live position per name: it blocks stacking multiple
-        strikes/sides on the same underlying (e.g. two SPY calls) and stops two
-        strategies from doubling up on a single symbol, which turns one weak
-        read into several correlated losses.
+        With ``strategy`` given, only positions opened by that strategy count.
+        This blocks stacking multiple strikes/sides on the same name WITHIN a
+        strategy (e.g. two 0DTE SPY calls) while still letting different
+        strategies hold the same underlying on different timeframes (a weekly
+        swing call and an intraday 0DTE scalp are independent trades).
+        Without ``strategy``, any open position on the name matches.
         """
-        row = self._query_one(
-            "SELECT COUNT(*) AS n FROM positions "
-            "WHERE status = ? AND underlying = ?",
-            (PositionStatus.OPEN.value, underlying),
-        )
+        if strategy is not None:
+            row = self._query_one(
+                "SELECT COUNT(*) AS n FROM positions "
+                "WHERE status = ? AND underlying = ? AND strategy = ?",
+                (PositionStatus.OPEN.value, underlying, strategy),
+            )
+        else:
+            row = self._query_one(
+                "SELECT COUNT(*) AS n FROM positions "
+                "WHERE status = ? AND underlying = ?",
+                (PositionStatus.OPEN.value, underlying),
+            )
         return bool(row and int(row["n"]) > 0)
 
     def all_positions(self, limit: int = 100) -> list[PaperPosition]:

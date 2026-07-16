@@ -31,9 +31,9 @@ account_tiers:
     risk:
       max_trade_risk_pct: 0.30
       # Two concurrent slots max on the smallest account. Combined with the
-      # one-position-per-underlying rule, this keeps the book small and stops
-      # correlated stacking (e.g. multiple SPY calls) that turns one weak read
-      # into several losses at once.
+      # one-position-per-underlying-per-strategy rule, this keeps the book
+      # small and stops correlated stacking (e.g. multiple SPY calls from one
+      # strategy) that turns one weak read into several losses at once.
       max_open_positions: 2
     contract_filters:
       min_delta: 0.20

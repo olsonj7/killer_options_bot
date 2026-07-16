@@ -121,12 +121,17 @@ class PaperEngine:
         if self.storage.count_open_positions() >= self.config.risk.max_open_positions:
             self._note_blocked(candidate, "max open positions reached")
             return None
-        # One position per underlying: never stack multiple strikes/sides on the
-        # same name, and never let a second strategy double up on it. This turns
-        # off the correlated-loss stacking that a single weak read would cause.
-        if self.storage.has_open_underlying(candidate.contract.underlying):
+        # One position per (strategy, underlying): never stack multiple
+        # strikes/sides on the same name within a strategy. Different
+        # strategies may hold the same underlying on different timeframes
+        # (weekly swing + 0DTE scalp are independent trades).
+        if self.storage.has_open_underlying(
+            candidate.contract.underlying, candidate.strategy
+        ):
             self._note_blocked(
-                candidate, f"blocked: already holding {candidate.contract.underlying}"
+                candidate,
+                f"blocked: {candidate.strategy} already holding "
+                f"{candidate.contract.underlying}",
             )
             return None
 

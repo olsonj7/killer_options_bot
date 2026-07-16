@@ -299,12 +299,14 @@ class Scanner:
         The strategy's own filters/exits drive contract selection and risk, so
         a 0DTE scalp and a LEAPS hold evaluate independently on the same name.
         """
-        # One position per underlying: if we already hold this name, there is
-        # nothing actionable to scan for -- a new candidate could only be
-        # blocked at open. Skip early so we neither log noise (a wall of
-        # "already holding" rows) nor spend a chain fetch on it. Exit
-        # management for the open position runs separately every tick.
-        if self.storage.has_open_underlying(symbol):
+        # One position per (strategy, underlying): if this strategy already
+        # holds the name, there is nothing actionable to scan for -- a new
+        # candidate could only be blocked at open. Skip early so we neither log
+        # noise (a wall of "already holding" rows) nor spend a chain fetch on
+        # it. A different strategy holding the same name does NOT skip: a
+        # weekly swing position must not hide a 0DTE opportunity (and vice
+        # versa). Exit management for open positions runs separately every tick.
+        if self.storage.has_open_underlying(symbol, strategy.name):
             return None
 
         # A per-strategy view of the config so RiskEngine and contract picking
