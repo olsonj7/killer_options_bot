@@ -89,8 +89,6 @@ STRATEGY_EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("contract_filters", "max_spread_pct", "Max spread (fraction)", "float", 0.0, 1.0),
     ("exits", "profit_target_pct", "Profit target (fraction)", "float", 0.01, 10.0),
     ("exits", "stop_loss_pct", "Stop loss (fraction)", "float", 0.01, 1.0),
-    ("exits", "max_holding_days", "Max holding days", "int", 0, 365),
-    ("exits", "min_dte_exit", "Min DTE exit", "int", 0, 365),
     ("exits", "trim_0_at_pct", "Trim 1 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
     ("exits", "trim_0_fraction", "Trim 1 — sell this fraction", "float", 0.0, 0.99),
     ("exits", "trim_1_at_pct", "Trim 2 — trigger (fraction, 0=off)", "float", 0.0, 10.0),
