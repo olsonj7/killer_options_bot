@@ -141,3 +141,23 @@ def test_tier_without_watchlist_key_keeps_base(tmp_path):
     cfg = load_config(path)
     assert cfg.watchlist == ["SPY"]
 
+
+def test_load_config_db_overrides_applied(tmp_path):
+    # DB overrides are layered on top of the YAML baseline and validated.
+    path = _write_config(tmp_path, 1000.0)
+    overrides = {
+        ("account", "value"): "2500.0",
+        ("risk", "max_trades_per_week"): "7",
+    }
+    cfg = load_config(path, overrides=overrides)
+    assert cfg.account_value == 2500.0
+    assert cfg.risk.max_trades_per_week == 7
+
+
+def test_load_config_invalid_override_is_skipped(tmp_path):
+    # A malformed override string must not crash the load; it is silently
+    # ignored and the YAML baseline value is used instead.
+    path = _write_config(tmp_path, 1000.0)
+    cfg = load_config(path, overrides={("account", "value"): "not_a_number"})
+    assert cfg.account_value == 1000.0
+

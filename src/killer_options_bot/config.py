@@ -371,8 +371,17 @@ _VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout"}
 
 
 
-def load_config(path: str | Path = "config.yaml") -> Config:
-    """Load and validate configuration from YAML + environment."""
+def load_config(
+    path: str | Path,
+    overrides: dict[tuple[str, str], str] | None = None,
+) -> Config:
+    """Load and validate configuration from YAML + environment.
+
+    ``overrides`` is an optional ``{(section, key): str_value}`` mapping
+    (produced by ``Storage.get_config_overrides``) that is layered on top of
+    the YAML baseline before parsing.  This lets the /config web UI save edits
+    to Supabase so they survive container redeploys without touching the file.
+    """
     load_dotenv()
 
     path = Path(path)
@@ -381,6 +390,14 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 
     with path.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
+
+    # Layer any DB-persisted overrides on top of the YAML baseline.
+    if overrides:
+        for (section, key), value_str in overrides.items():
+            try:
+                raw.setdefault(section, {})[key] = float(value_str)
+            except (ValueError, TypeError):
+                pass
 
     account = raw.get("account", {})
     mode = raw.get("mode", {})

@@ -238,17 +238,58 @@ def test_config_page_renders_current_values(tmp_path):
     assert "Max risk / trade" in page
 
 
+def test_config_page_shows_overridden_values(tmp_path):
+    # When a DB override exists the config page should reflect the effective
+    # value, not the YAML baseline, so the user sees what the bot is using.
+    from killer_options_bot.config import load_config
+    from killer_options_bot.storage import get_storage
+
+    config_path = _write_config(tmp_path, account_value=1000.0)
+    base = load_config(config_path)
+    storage = get_storage(base)
+    storage.set_config_override("account", "value", 7500.0)
+
+    page = Dashboard(config_path, source="mock").render_config()
+    assert "7500" in page
+    assert "1000" not in page.split("value='7500")[0].split("account")[-1]  # form shows 7500
+
+
 def test_config_save_updates_and_validates(tmp_path):
     config_path = _write_config(tmp_path)
-    dash = Dashboard(config_path, source="mock")
+    from killer_options_bot.config import load_config
+    from killer_options_bot.storage import get_storage
 
+    dash = Dashboard(config_path, source="mock")
     msg = dash.save_config({"account.value": ["50000"],
                             "risk.max_trades_per_week": ["3"]})
     assert "saved" in msg.lower()
 
-    saved = yaml.safe_load(open(config_path, encoding="utf-8"))
-    assert saved["account"]["value"] == 50000.0
-    assert saved["risk"]["max_trades_per_week"] == 3
+    # Values are now in the DB, not the YAML file.
+    base = load_config(config_path)
+    storage = get_storage(base)
+    overrides = storage.get_config_overrides()
+    assert float(overrides[("account", "value")]) == 50000.0
+    assert int(float(overrides[("risk", "max_trades_per_week")])) == 3
+
+    # YAML file must be untouched.
+    saved_yaml = yaml.safe_load(open(config_path, encoding="utf-8"))
+    assert saved_yaml["account"]["value"] == 25000.0  # _write_config default
+
+
+def test_config_override_applied_to_running_config(tmp_path):
+    # The override must be visible in _context() so the bot runs with the
+    # new value without a redeploy.
+    config_path = _write_config(tmp_path, account_value=1000.0)
+    from killer_options_bot.config import load_config
+    from killer_options_bot.storage import get_storage
+
+    storage = get_storage(load_config(config_path))
+    storage.set_config_override("account", "value", 5000.0)
+
+    dash = Dashboard(config_path, source="mock")
+    html_out = dash.render()
+    assert "$5,000.00" in html_out
+    assert "$1,000.00" not in html_out
 
 
 def test_config_save_rejects_out_of_range(tmp_path):
@@ -257,8 +298,9 @@ def test_config_save_rejects_out_of_range(tmp_path):
     # max_trade_risk_pct must be <= 1.0.
     msg = dash.save_config({"risk.max_trade_risk_pct": ["5"]})
     assert "not saved" in msg.lower()
-    saved = yaml.safe_load(open(config_path, encoding="utf-8"))
-    assert saved["risk"]["max_trade_risk_pct"] == 0.05  # unchanged
+    # YAML unchanged and no override persisted.
+    saved_yaml = yaml.safe_load(open(config_path, encoding="utf-8"))
+    assert saved_yaml["risk"]["max_trade_risk_pct"] == 0.05
 
 
 def test_config_save_rejects_bad_cross_field(tmp_path):
@@ -268,5 +310,5 @@ def test_config_save_rejects_bad_cross_field(tmp_path):
     msg = dash.save_config({"contract_filters.min_dte": ["90"],
                             "contract_filters.max_dte": ["30"]})
     assert "not saved" in msg.lower()
-    saved = yaml.safe_load(open(config_path, encoding="utf-8"))
-    assert saved["contract_filters"]["min_dte"] == 30  # unchanged
+    saved_yaml = yaml.safe_load(open(config_path, encoding="utf-8"))
+    assert saved_yaml["contract_filters"]["min_dte"] == 30  # unchanged

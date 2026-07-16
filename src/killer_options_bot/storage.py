@@ -244,6 +244,35 @@ class BaseStorage:
     def set_strategy_enabled(self, name: str, enabled: bool) -> None:
         self.set_state(self._strategy_key(name), "1" if enabled else "0")
 
+    # --- Config overrides (survive container redeploys) --------------------
+    # Stored as ``config:<section>.<key>`` entries in runtime_state.
+    # The YAML file is the baseline; these DB rows are layered on top every
+    # time the config is loaded, so edits made via the /config UI take effect
+    # immediately and survive Railway redeploys (shared Supabase persists).
+
+    _CONFIG_NS = "config:"
+
+    def set_config_override(self, section: str, key: str, value: float | int) -> None:
+        """Persist a config field edit to the DB."""
+        self.set_state(f"{self._CONFIG_NS}{section}.{key}", str(value))
+
+    def get_config_overrides(self) -> dict[tuple[str, str], str]:
+        """Return all config overrides as {(section, key): str_value}.
+
+        Reads all runtime_state rows and filters in Python (avoids LIKE with
+        ``%`` which some Postgres drivers treat as a placeholder character).
+        """
+        rows = self._query_all("SELECT key, value FROM runtime_state", ())
+        result: dict[tuple[str, str], str] = {}
+        for row in rows:
+            k: str = row["key"]
+            if k.startswith(self._CONFIG_NS):
+                field = k[len(self._CONFIG_NS):]
+                parts = field.split(".", 1)
+                if len(parts) == 2:
+                    result[(parts[0], parts[1])] = row["value"]
+        return result
+
     # --- Candidates --------------------------------------------------------
 
     def record_candidate(self, candidate: Candidate) -> int:

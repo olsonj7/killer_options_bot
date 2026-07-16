@@ -81,8 +81,10 @@ class Dashboard:
         self.source = source
 
     def _context(self):
-        config = load_config(self.config_path)
-        storage = get_storage(config)
+        base_config = load_config(self.config_path)
+        storage = get_storage(base_config)
+        overrides = storage.get_config_overrides()
+        config = load_config(self.config_path, overrides) if overrides else base_config
         data = _build_data_source(self.source, config)
         engine = PaperEngine(config, data, storage, cost_model=config.cost_model())
         return config, storage, data, engine
@@ -132,13 +134,25 @@ class Dashboard:
             return yaml.safe_load(fh) or {}
 
     def save_config(self, form: dict[str, list[str]]) -> str:
-        """Validate and persist edited fields back to config.yaml.
+        """Validate and persist edited fields to the DB.
 
-        Only whitelisted fields are written. Values are range-checked. If the
-        resulting config fails to load/validate, the file is not changed.
+        Only whitelisted fields are written. Values are range-checked. Overrides
+        are stored in Supabase (runtime_state) so they survive container redeploys
+        and take effect on the next dashboard render without any code push.
         """
+        base_config = load_config(self.config_path)
+        storage = get_storage(base_config)
+        existing = storage.get_config_overrides()
+
+        # Build effective raw dict: YAML + existing DB overrides + new form values
         raw = self._load_raw_config()
-        updated = 0
+        for (sec, k), v_str in existing.items():
+            try:
+                raw.setdefault(sec, {})[k] = float(v_str)
+            except (ValueError, TypeError):
+                pass
+
+        to_save: list[tuple[str, str, int | float]] = []
         errors: list[str] = []
 
         for section, key, label, kind, lo, hi in EDITABLE_FIELDS:
@@ -150,7 +164,7 @@ class Dashboard:
             if text == "":
                 continue
             try:
-                value = int(text) if kind == "int" else float(text)
+                value: int | float = int(text) if kind == "int" else float(text)
             except ValueError:
                 errors.append(f"{label}: not a number")
                 continue
@@ -158,7 +172,7 @@ class Dashboard:
                 errors.append(f"{label}: must be between {lo:g} and {hi:g}")
                 continue
             raw.setdefault(section, {})[key] = value
-            updated += 1
+            to_save.append((section, key, value))
 
         # Cross-field sanity checks.
         cf = raw.get("contract_filters", {})
@@ -170,18 +184,19 @@ class Dashboard:
         if errors:
             return "Config not saved. " + "; ".join(errors)
 
-        # Write to a temp file first, then validate by loading it.
-        tmp_path = Path(self.config_path).with_suffix(".yaml.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(raw, fh, sort_keys=False)
+        # Validate the full merged config before committing any writes.
+        new_overrides = dict(existing)
+        for section, key, value in to_save:
+            new_overrides[(section, key)] = str(value)
         try:
-            load_config(str(tmp_path))
+            load_config(self.config_path, new_overrides)
         except Exception as exc:
-            tmp_path.unlink(missing_ok=True)
             return f"Config rejected (validation failed): {exc}"
 
-        tmp_path.replace(self.config_path)
-        return f"Config saved: {updated} field(s) updated."
+        for section, key, value in to_save:
+            storage.set_config_override(section, key, value)
+
+        return f"Config saved: {len(to_save)} field(s) updated."
 
     def set_strategies(self, form: dict[str, list[str]]) -> str:
         """Persist which strategies are enabled from the checkbox form.
@@ -206,6 +221,14 @@ class Dashboard:
 
     def render_config(self, flash: str = "") -> str:
         raw = self._load_raw_config()
+        # Apply DB overrides so the form shows effective (not just YAML) values.
+        base_config = load_config(self.config_path)
+        storage = get_storage(base_config)
+        for (section, key), value_str in storage.get_config_overrides().items():
+            try:
+                raw.setdefault(section, {})[key] = float(value_str)
+            except (ValueError, TypeError):
+                pass
         return _render_config_page(raw, self.source, flash)
 
     # --- Rendering ---------------------------------------------------------
