@@ -1097,6 +1097,47 @@ def _shared_css() -> str:
 """
 
 
+def _config_fields_html(
+    fields: list,
+    raw_section_getter,
+    prefix: str = "",
+) -> str:
+    """Render a list of field rows for the config form.
+
+    ``fields`` is a list of (section, key, label, kind, lo, hi) tuples.
+    ``raw_section_getter(section, key)`` returns the current value string.
+    ``prefix`` is prepended to the field name (e.g. "strategy.zerodte.").
+    """
+    rows = []
+    last_section = None
+    section_labels = {
+        "contract_filters": "Contract filters",
+        "exits": "Exits",
+        "account": "Account",
+        "risk": "Risk",
+    }
+    for section, key, label, kind, lo, hi in fields:
+        if section != last_section:
+            rows.append(
+                f"<div class='cfg-section'>"
+                f"{html.escape(section_labels.get(section, section))}"
+                f"</div>"
+            )
+            last_section = section
+        current = raw_section_getter(section, key)
+        field_id = f"{prefix}{section}.{key}"
+        step = "1" if kind == "int" else "any"
+        rows.append(
+            f"<div class='field'>"
+            f"<label for='{field_id}'>{html.escape(label)}</label>"
+            f"<input type='number' step='{step}' id='{field_id}' "
+            f"name='{field_id}' value='{html.escape(str(current))}' "
+            f"min='{lo:g}' max='{hi:g}'>"
+            f"</div>"
+        )
+    return "".join(rows)
+
+
 def _render_config_page(
     raw: dict,
     source: str,
@@ -1106,60 +1147,58 @@ def _render_config_page(
     flash_html = (
         f"<div class='flash'>{html.escape(flash)}</div>" if flash else ""
     )
-    rows = []
-    last_section = None
-    for section, key, label, kind, lo, hi in EDITABLE_FIELDS:
-        if section != last_section:
-            label_map = {
-                "account": "Account (applies to all strategies)",
-                "risk": "Risk (applies to all strategies)",
-                "contract_filters": "default — contract filters",
-                "exits": "default — exits",
-            }
-            rows.append(
-                f"<div class='section'>{html.escape(label_map.get(section, section))}</div>"
-            )
-            last_section = section
-        current = (raw.get(section, {}) or {}).get(key, "")
-        step = "1" if kind == "int" else "any"
-        rows.append(
-            f"<div class='field'>"
-            f"<label for='{section}.{key}'>{html.escape(label)}</label>"
-            f"<input type='number' step='{step}' "
-            f"id='{section}.{key}' name='{section}.{key}' "
-            f"value='{html.escape(str(current))}' "
-            f"min='{lo:g}' max='{hi:g}'></div>"
-        )
 
-    # Per-strategy sections for all non-default active strategies.
+    # --- Tab: Global ---------------------------------------------------------
+    def _global_val(section: str, key: str) -> str:
+        return str((raw.get(section, {}) or {}).get(key, ""))
+
+    global_fields = [(s, k, lbl, knd, lo, hi)
+                     for s, k, lbl, knd, lo, hi in EDITABLE_FIELDS
+                     if s in ("account", "risk")]
+    global_html = _config_fields_html(global_fields, _global_val)
+
+    # --- Tab: default (weekly) -----------------------------------------------
+    default_strat = next(
+        (s for s in (active_strategies or ()) if s.name == "default"), None
+    )
+
+    def _default_val(section: str, key: str) -> str:
+        if section == "contract_filters":
+            return str(getattr(default_strat.filters, key, "")) if default_strat else str((raw.get(section, {}) or {}).get(key, ""))
+        return str(getattr(default_strat.exits, key, "")) if default_strat else str((raw.get(section, {}) or {}).get(key, ""))
+
+    default_fields = [(s, k, lbl, knd, lo, hi)
+                      for s, k, lbl, knd, lo, hi in EDITABLE_FIELDS
+                      if s in ("contract_filters", "exits")]
+    default_html = _config_fields_html(default_fields, _default_val)
+
+    # --- Tabs: per non-default strategy --------------------------------------
+    strat_tabs_nav = ""
+    strat_tabs_content = ""
     for strat in (active_strategies or ()):
         if strat.name == "default":
             continue
-        last_section = None
-        for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
-            if section != last_section:
-                rows.append(
-                    f"<div class='section'>{html.escape(strat.name)} &mdash; "
-                    f"{html.escape(section.replace('_', ' '))}</div>"
-                )
-                last_section = section
-            # Effective value from the StrategyConfig object.
-            if section == "contract_filters":
-                current = getattr(strat.filters, key, "")
-            else:
-                current = getattr(strat.exits, key, "")
-            field_id = f"strategy.{strat.name}.{section}.{key}"
-            step = "1" if kind == "int" else "any"
-            rows.append(
-                f"<div class='field'>"
-                f"<label for='{field_id}'>{html.escape(label)}</label>"
-                f"<input type='number' step='{step}' "
-                f"id='{field_id}' name='{field_id}' "
-                f"value='{html.escape(str(current))}' "
-                f"min='{lo:g}' max='{hi:g}'></div>"
-            )
+        tab_id = html.escape(strat.name)
+        prefix = f"strategy.{strat.name}."
 
-    fields_html = "".join(rows)
+        def _strat_val(section: str, key: str, _s=strat) -> str:
+            if section == "contract_filters":
+                return str(getattr(_s.filters, key, ""))
+            return str(getattr(_s.exits, key, ""))
+
+        content = _config_fields_html(STRATEGY_EDITABLE_FIELDS, _strat_val, prefix)
+        display_name = strat.name.replace("zerodte", "0DTE").replace("_", " ").title()
+        strat_tabs_nav += (
+            f"<button type='button' class='tab-btn' "
+            f"data-tab='tab-{tab_id}' onclick='switchTab(this)'>"
+            f"{html.escape(display_name)}</button>"
+        )
+        strat_tabs_content += (
+            f"<div id='tab-{tab_id}' class='tab-panel' style='display:none'>"
+            f"{content}</div>"
+        )
+
+    has_strat_tabs = bool(strat_tabs_nav)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1167,7 +1206,22 @@ def _render_config_page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Config &mdash; Killer Options Bot</title>
-<style>{_shared_css()}</style>
+<style>
+{_shared_css()}
+  .tabs {{ display: flex; gap: 2px; border-bottom: 1px solid #30363d;
+           margin-bottom: 20px; }}
+  .tab-btn {{ background: transparent; border: none; border-bottom: 2px solid transparent;
+              color: #8b949e; padding: 8px 16px; font-size: 14px; cursor: pointer;
+              margin: 0; margin-bottom: -1px; border-radius: 0; }}
+  .tab-btn:hover {{ color: #e6edf3; filter: none; }}
+  .tab-btn.active {{ color: #e6edf3; border-bottom-color: #2f81f7; }}
+  .tab-panel {{ display: none; }}
+  .tab-panel.active {{ display: block; }}
+  .cfg-section {{ color: #8b949e; font-size: 11px; text-transform: uppercase;
+                  letter-spacing: 0.07em; margin: 20px 0 4px; }}
+  .save-bar {{ margin-top: 20px; padding-top: 16px;
+               border-top: 1px solid #30363d; }}
+</style>
 </head>
 <body>
 <header>
@@ -1178,13 +1232,49 @@ def _render_config_page(
 <main>
   {flash_html}
   <form method="post" action="/config">
-    {fields_html}
-    <button type="submit">Save config</button>
+    <div class="tabs">
+      <button type="button" class="tab-btn active" data-tab="tab-global" onclick="switchTab(this)">Global</button>
+      <button type="button" class="tab-btn" data-tab="tab-default" onclick="switchTab(this)">Weekly (default)</button>
+      {strat_tabs_nav}
+    </div>
+    <div id="tab-global" class="tab-panel active">{global_html}</div>
+    <div id="tab-default" class="tab-panel">{default_html}</div>
+    {strat_tabs_content}
+    <div class="save-bar">
+      <button type="submit">Save config</button>
+      <span class="warn" style="margin-left:14px;">Watchlist, data source,
+        and storage paths require editing config.yaml directly.</span>
+    </div>
   </form>
-  <div class="warn">Only these numeric risk/filter/exit fields are editable
-    here. Watchlist, data source, and storage paths are edited in
-    config.yaml directly. Changes are validated before saving.</div>
 </main>
+<script>
+  function switchTab(btn) {{
+    document.querySelectorAll('.tab-btn').forEach(function(b) {{
+      b.classList.remove('active');
+    }});
+    document.querySelectorAll('.tab-panel').forEach(function(p) {{
+      p.style.display = 'none';
+      p.classList.remove('active');
+    }});
+    btn.classList.add('active');
+    var panel = document.getElementById(btn.dataset.tab);
+    if (panel) {{ panel.style.display = 'block'; panel.classList.add('active'); }}
+  }}
+  // Restore the active tab from the URL hash so Save config keeps you on the
+  // same tab after the redirect (browser re-sends the hash on reload).
+  (function () {{
+    var hash = window.location.hash.replace('#', '');
+    if (hash) {{
+      var btn = document.querySelector('.tab-btn[data-tab="' + hash + '"]');
+      if (btn) switchTab(btn);
+    }}
+    document.querySelectorAll('.tab-btn').forEach(function(b) {{
+      b.addEventListener('click', function() {{
+        history.replaceState(null, '', '#' + b.dataset.tab);
+      }});
+    }});
+  }})();
+</script>
 </body>
 </html>"""
 
