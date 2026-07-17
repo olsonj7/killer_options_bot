@@ -720,7 +720,16 @@ def run_loop(
             )
             if once:
                 break
-            _sleep(wait)
+            # Sleep in short chunks so we keep writing heartbeats and the
+            # dashboard doesn't falsely declare the loop dead during long
+            # after-hours waits.
+            heartbeat_interval = 120.0
+            elapsed = 0.0
+            while elapsed < wait and not _stopped():
+                chunk = min(heartbeat_interval, wait - elapsed)
+                _sleep(chunk)
+                elapsed += chunk
+                _heartbeat("market_closed")
             continue
 
         _heartbeat("scanning")

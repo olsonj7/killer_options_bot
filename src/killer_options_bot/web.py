@@ -768,7 +768,7 @@ def _render_status_banner(storage: "BaseStorage") -> str:
 
     # Stale heartbeat => the loop process is gone even if it once ran. Use a
     # generous window so a slow tick or long 0DTE chain fetch doesn't flap.
-    if age > 300:
+    if age > 600:
         return (
             "<div class='status status-off'>"
             f"\u25cf Scans not running \u2014 last heartbeat {age_txt} ago. "
