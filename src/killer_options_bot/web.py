@@ -855,7 +855,8 @@ def _render_page(
                 f"<td>{_fmt_money(p.entry_price)}</td>"
                 f"<td>-</td><td>-</td>"
                 f"<td>{p.holding_days(engine.as_of)}</td>"
-                f"<td>{p.dte(engine.as_of)}</td></tr>"
+                f"<td>{p.dte(engine.as_of)}</td>"
+                f"<td>{html.escape(p.strategy or 'default')}</td></tr>"
             )
             continue
         upl = p.unrealized_pl(price)
@@ -884,6 +885,7 @@ def _render_page(
             f"<td>{p.holding_days(engine.as_of)}</td>"
             f"<td>{p.expiration.isoformat()}</td>"
             f"<td>{p.dte(engine.as_of)}</td>"
+            f"<td>{html.escape(p.strategy or 'default')}</td>"
             f"<td>{mode_cell}</td></tr>"
         )
 
@@ -925,7 +927,7 @@ def _render_page(
     )
     pos_body = (
         "".join(pos_rows)
-        or "<tr><td colspan='12' class='muted'>No open positions.</td></tr>"
+        or "<tr><td colspan='13' class='muted'>No open positions.</td></tr>"
     )
     cand_body = (
         "".join(cand_rows)
@@ -1086,7 +1088,7 @@ def _render_page(
   <h2 style="font-size:15px;">Open positions</h2>
   <table>
     <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Strike</th><th>Qty</th><th>Entry</th>
-        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Mode</th></tr>
+        <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Strategy</th><th>Mode</th></tr>
     {pos_body}
   </table>
 
