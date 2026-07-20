@@ -699,135 +699,152 @@ def run_loop(
         # "scanning" while the market is open or "market_closed" when idle.
         try:
             storage.set_state("loop_heartbeat", state)
+            if state != "error":
+                storage.set_state("loop_last_error", "")
         except Exception:  # pragma: no cover - never let telemetry crash loop
             pass
 
-    while not _stopped():
-        now_mono = _time.monotonic()
-        open_now = ignore_market_hours or market.is_market_open()
+    def _record_loop_error(exc: Exception) -> None:
+        msg = f"{type(exc).__name__}: {exc}"
+        try:
+            storage.set_state("loop_heartbeat", "error")
+            storage.set_state("loop_last_error", msg)
+        except Exception:  # pragma: no cover - never let telemetry crash loop
+            pass
+        log(f"[{datetime.now().strftime('%H:%M:%S')}] loop error: {msg}")
 
-        if not open_now:
-            _heartbeat("market_closed")
-            wait = (
-                tick
-                if ignore_market_hours
-                else min(max(market.seconds_until_open(), tick), 3600.0)
+    while not _stopped():
+        try:
+            now_mono = _time.monotonic()
+            open_now = ignore_market_hours or market.is_market_open()
+
+            if not open_now:
+                _heartbeat("market_closed")
+                wait = (
+                    tick
+                    if ignore_market_hours
+                    else min(max(market.seconds_until_open(), tick), 3600.0)
+                )
+                nxt = market.next_open().strftime("%Y-%m-%d %H:%M %Z")
+                log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] market closed; "
+                    f"next open {nxt} (sleeping {int(wait)}s)"
+                )
+                if once:
+                    break
+                # Sleep in short chunks so we keep writing heartbeats and the
+                # dashboard doesn't falsely declare the loop dead during long
+                # after-hours waits.
+                heartbeat_interval = 120.0
+                elapsed = 0.0
+                while elapsed < wait and not _stopped():
+                    chunk = min(heartbeat_interval, wait - elapsed)
+                    _sleep(chunk)
+                    elapsed += chunk
+                    _heartbeat("market_closed")
+                continue
+
+            _heartbeat("scanning")
+            as_of = date.today()
+
+            # Reload config each tick so DB overrides (edits made via the /config
+            # page) take effect immediately without a Railway redeploy. Failure is
+            # non-fatal: the previous config keeps the loop alive.
+            try:
+                _ov = storage.get_config_overrides()
+                _sov = storage.get_strategy_config_overrides()
+                if _ov or _sov:
+                    config = load_config(config_path, _ov or None, _sov or None)
+                    # Activate any strategies that were added by the new config.
+                    for _s in config.active_strategies:
+                        next_scan.setdefault(_s.name, 0.0)
+                    strategies = list(config.active_strategies)
+            except Exception:
+                pass
+
+            data = _build_data_source(source, config, as_of=None)
+            engine = PaperEngine(
+                config, data, storage, as_of=as_of, cost_model=config.cost_model()
             )
-            nxt = market.next_open().strftime("%Y-%m-%d %H:%M %Z")
-            log(
-                f"[{datetime.now().strftime('%H:%M:%S')}] market closed; "
-                f"next open {nxt} (sleeping {int(wait)}s)"
-            )
+            scanner = Scanner(config, data, storage, as_of=as_of)
+            stamp = datetime.now().strftime("%H:%M:%S")
+
+            # 1) Always manage exits first (capital protection).
+            results = engine.manage_all()
+            closed = sum(1 for r in results if r.closed)
+            trimmed = sum(1 for r in results if r.trimmed and not r.closed)
+            if results:
+                extra = f", trimmed {trimmed}" if trimmed else ""
+                log(
+                    f"[{stamp}] managed {len(results)} position(s), "
+                    f"closed {closed}{extra}"
+                )
+
+            # 2) Scan each strategy that is due for new entries.
+            opened = 0
+            scanned = []
+            skipped = []
+            skipped_open_range = False
+            for strategy in strategies:
+                if now_mono < next_scan[strategy.name]:
+                    continue
+                # Live enable/disable toggle set from the dashboard (defaults to
+                # enabled). Lets you match strategies to the market regime without
+                # a redeploy. Exit management above always runs regardless, so
+                # disabling a strategy stops NEW entries but still protects any
+                # positions it already opened.
+                if not storage.strategy_enabled(strategy.name):
+                    skipped.append(strategy.name)
+                    continue
+                scanned.append(strategy.name)
+                next_scan[strategy.name] = (
+                    now_mono + strategy.scan_interval_minutes * 60
+                )
+                for candidate in scanner.scan_strategy(strategy):
+                    if not candidate.decision.allowed:
+                        continue
+                    if not paper:
+                        continue
+                    # 0DTE opening-range guard: do not open same-day-expiry
+                    # positions in the first 30 minutes of the session (the noisy,
+                    # wide-spread opening range). Existing positions are still
+                    # managed above; this only blocks NEW 0DTE entries. Bypassed
+                    # when the trading clock is ignored (backtest/tests).
+                    if (
+                        not ignore_market_hours
+                        and candidate.contract.dte(as_of) <= 0
+                        and market.in_opening_range()
+                    ):
+                        skipped_open_range = True
+                        if candidate.id is not None:
+                            storage.mark_candidate_blocked(
+                                candidate.id,
+                                "blocked: 0DTE opening-range guard (first 30 min)",
+                            )
+                        continue
+                    position = engine.open_from_candidate(candidate)
+                    if position is not None:
+                        opened += 1
+                        log(
+                            f"[{stamp}] opened #{position.id} "
+                            f"[{strategy.name}] {position.quantity}x "
+                            f"{position.option_symbol} @ "
+                            f"${position.entry_price:.2f}"
+                        )
+            if scanned and opened == 0:
+                extra = f" (skipped {skipped})" if skipped else ""
+                if skipped_open_range:
+                    extra += " (0DTE opening-range guard active)"
+                log(f"[{stamp}] scanned {scanned}: no new entries{extra}")
+            cycles += 1
             if once:
                 break
-            # Sleep in short chunks so we keep writing heartbeats and the
-            # dashboard doesn't falsely declare the loop dead during long
-            # after-hours waits.
-            heartbeat_interval = 120.0
-            elapsed = 0.0
-            while elapsed < wait and not _stopped():
-                chunk = min(heartbeat_interval, wait - elapsed)
-                _sleep(chunk)
-                elapsed += chunk
-                _heartbeat("market_closed")
-            continue
-
-        _heartbeat("scanning")
-        as_of = date.today()
-
-        # Reload config each tick so DB overrides (edits made via the /config
-        # page) take effect immediately without a Railway redeploy. Failure is
-        # non-fatal: the previous config keeps the loop alive.
-        try:
-            _ov = storage.get_config_overrides()
-            _sov = storage.get_strategy_config_overrides()
-            if _ov or _sov:
-                config = load_config(config_path, _ov or None, _sov or None)
-                # Activate any strategies that were added by the new config.
-                for _s in config.active_strategies:
-                    next_scan.setdefault(_s.name, 0.0)
-                strategies = list(config.active_strategies)
-        except Exception:
-            pass
-
-        data = _build_data_source(source, config, as_of=None)
-        engine = PaperEngine(
-            config, data, storage, as_of=as_of, cost_model=config.cost_model()
-        )
-        scanner = Scanner(config, data, storage, as_of=as_of)
-        stamp = datetime.now().strftime("%H:%M:%S")
-
-        # 1) Always manage exits first (capital protection).
-        results = engine.manage_all()
-        closed = sum(1 for r in results if r.closed)
-        trimmed = sum(1 for r in results if r.trimmed and not r.closed)
-        if results:
-            extra = f", trimmed {trimmed}" if trimmed else ""
-            log(
-                f"[{stamp}] managed {len(results)} position(s), "
-                f"closed {closed}{extra}"
-            )
-
-        # 2) Scan each strategy that is due for new entries.
-        opened = 0
-        scanned = []
-        skipped = []
-        skipped_open_range = False
-        for strategy in strategies:
-            if now_mono < next_scan[strategy.name]:
-                continue
-            # Live enable/disable toggle set from the dashboard (defaults to
-            # enabled). Lets you match strategies to the market regime without
-            # a redeploy. Exit management above always runs regardless, so
-            # disabling a strategy stops NEW entries but still protects any
-            # positions it already opened.
-            if not storage.strategy_enabled(strategy.name):
-                skipped.append(strategy.name)
-                continue
-            scanned.append(strategy.name)
-            next_scan[strategy.name] = (
-                now_mono + strategy.scan_interval_minutes * 60
-            )
-            for candidate in scanner.scan_strategy(strategy):
-                if not candidate.decision.allowed:
-                    continue
-                if not paper:
-                    continue
-                # 0DTE opening-range guard: do not open same-day-expiry
-                # positions in the first 30 minutes of the session (the noisy,
-                # wide-spread opening range). Existing positions are still
-                # managed above; this only blocks NEW 0DTE entries. Bypassed
-                # when the trading clock is ignored (backtest/tests).
-                if (
-                    not ignore_market_hours
-                    and candidate.contract.dte(as_of) <= 0
-                    and market.in_opening_range()
-                ):
-                    skipped_open_range = True
-                    if candidate.id is not None:
-                        storage.mark_candidate_blocked(
-                            candidate.id,
-                            "blocked: 0DTE opening-range guard (first 30 min)",
-                        )
-                    continue
-                position = engine.open_from_candidate(candidate)
-                if position is not None:
-                    opened += 1
-                    log(
-                        f"[{stamp}] opened #{position.id} "
-                        f"[{strategy.name}] {position.quantity}x "
-                        f"{position.option_symbol} @ "
-                        f"${position.entry_price:.2f}"
-                    )
-        if scanned and opened == 0:
-            extra = f" (skipped {skipped})" if skipped else ""
-            if skipped_open_range:
-                extra += " (0DTE opening-range guard active)"
-            log(f"[{stamp}] scanned {scanned}: no new entries{extra}")
-        cycles += 1
-        if once:
-            break
-        _sleep(tick)
+            _sleep(tick)
+        except Exception as exc:
+            _record_loop_error(exc)
+            if once:
+                raise
+            _sleep(min(float(tick), 30.0))
 
     log(f"Run loop finished after {cycles} active cycle(s).")
     return cycles

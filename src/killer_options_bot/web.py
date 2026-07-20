@@ -757,6 +757,7 @@ def _render_status_banner(storage: "BaseStorage") -> str:
             "</div>"
         )
     state, updated_at = row
+    last_error = (storage.get_state("loop_last_error") or "").strip()
     try:
         beat = datetime.fromisoformat(updated_at)
         if beat.tzinfo is None:
@@ -769,10 +770,18 @@ def _render_status_banner(storage: "BaseStorage") -> str:
     # Stale heartbeat => the loop process is gone even if it once ran. Use a
     # generous window so a slow tick or long 0DTE chain fetch doesn't flap.
     if age > 600:
+        detail = f" Last error: {html.escape(last_error)}." if last_error else ""
         return (
             "<div class='status status-off'>"
             f"\u25cf Scans not running \u2014 last heartbeat {age_txt} ago. "
-            "The loop appears stopped."
+            f"The loop appears stopped.{detail}"
+            "</div>"
+        )
+    if state == "error":
+        detail = html.escape(last_error) if last_error else "unknown error"
+        return (
+            "<div class='status status-off'>"
+            f"\u25cf Loop error \u2014 last heartbeat {age_txt} ago. {detail}."
             "</div>"
         )
     if state == "scanning":
