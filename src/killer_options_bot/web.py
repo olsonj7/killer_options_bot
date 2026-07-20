@@ -665,11 +665,13 @@ def _render_strategy_pl_bars(closed: list[PaperPosition]) -> str:
         else:
             bx = axis_x - bar_len
         bar_h = 14
-        # Value label sits just past the outer end of the bar.
+        # Value label sits next to the zero axis (not the bar's outer end),
+        # so its position never depends on bar length — a long bar can never
+        # push the label into the strategy name label on the far left.
         if pl >= 0:
-            tx, anchor = axis_x + bar_len + 6, "start"
+            tx, anchor = axis_x - 6, "end"
         else:
-            tx, anchor = axis_x - bar_len - 6, "end"
+            tx, anchor = axis_x + 6, "start"
         bars.append(
             f"<text x='{label_w - 10}' y='{cy + 4:.1f}' fill='#c9d1d9' "
             f"font-size='12' text-anchor='end'>{html.escape(_display_strategy_name(name))}</text>"
