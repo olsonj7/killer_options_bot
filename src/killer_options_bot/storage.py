@@ -352,20 +352,33 @@ class BaseStorage:
         since = datetime.utcnow() - timedelta(days=7)
         return self.count_allowed_since(since)
 
-    def positions_opened_since(self, since: date) -> int:
+    def positions_opened_since(self, since: date, strategy: str | None = None) -> int:
         """Count positions whose entry_date is on/after ``since``.
 
         Basing the weekly-cadence guardrail on entry dates (not wall-clock
         candidate timestamps) keeps it correct during backtests too.
+
+        When ``strategy`` is given, only counts positions opened by that
+        strategy — otherwise a fast-cadence strategy (e.g. 0DTE, which can
+        open several trades a day) exhausts a shared weekly limit and blocks
+        every other strategy from entering, even if THAT strategy hasn't
+        traded at all this week.
         """
-        row = self._query_one(
-            "SELECT COUNT(*) AS n FROM positions WHERE entry_date >= ?",
-            (since.isoformat(),),
-        )
+        if strategy is not None:
+            row = self._query_one(
+                "SELECT COUNT(*) AS n FROM positions "
+                "WHERE entry_date >= ? AND strategy = ?",
+                (since.isoformat(), strategy),
+            )
+        else:
+            row = self._query_one(
+                "SELECT COUNT(*) AS n FROM positions WHERE entry_date >= ?",
+                (since.isoformat(),),
+            )
         return int(row["n"]) if row else 0
 
-    def trades_in_trailing_week(self, as_of: date) -> int:
-        return self.positions_opened_since(as_of - timedelta(days=7))
+    def trades_in_trailing_week(self, as_of: date, strategy: str | None = None) -> int:
+        return self.positions_opened_since(as_of - timedelta(days=7), strategy)
 
     def recent_candidates(self, limit: int = 20) -> list[dict]:
         return self._query_all(
