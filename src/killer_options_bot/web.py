@@ -393,17 +393,20 @@ def _equity_curve_svg(
             "Not enough closed trades yet to chart an equity curve.</div>"
         )
 
-    w, h, pad = 1040, 220, 28
+    w, h = 1040, 240
+    pad_x = 28
+    plot_top = 46
+    plot_bottom = h - 28
     lo = min(points)
     hi = max(points)
     span = (hi - lo) or 1.0
     n = len(points) - 1
 
     def x(i: int) -> float:
-        return pad + (w - 2 * pad) * (i / n)
+        return pad_x + (w - 2 * pad_x) * (i / n)
 
     def y(v: float) -> float:
-        return pad + (h - 2 * pad) * (1 - (v - lo) / span)
+        return plot_top + (plot_bottom - plot_top) * (1 - (v - lo) / span)
 
     # Solid line covers realized points; a dashed segment shows the projection.
     solid_end = proj_index if proj_index is not None else len(points)
@@ -417,11 +420,14 @@ def _equity_curve_svg(
     zero_line = ""
     if lo <= 0 <= hi:
         zero_line = (
-            f"<line x1='{pad}' y1='{zero_y:.1f}' x2='{w - pad}' "
+            f"<line x1='{pad_x}' y1='{zero_y:.1f}' x2='{w - pad_x}' "
             f"y2='{zero_y:.1f}' stroke='#30363d' stroke-dasharray='4 4'/>"
         )
     # Area under the realized line for a subtle fill.
-    area = f"{pad},{h - pad} {solid_coords} {x(solid_end - 1):.1f},{h - pad}"
+    area = (
+        f"{pad_x},{plot_bottom} {solid_coords} "
+        f"{x(solid_end - 1):.1f},{plot_bottom}"
+    )
 
     proj_svg = ""
     if proj_index is not None:
@@ -446,10 +452,10 @@ def _equity_curve_svg(
   <polyline points="{solid_coords}" fill="none" stroke="{line_color}"
     stroke-width="2" stroke-linejoin="round"/>
   {proj_svg}
-  <text x="{pad}" y="16" fill="#8b949e" font-size="11">
+    <text x="{pad_x}" y="18" fill="#8b949e" font-size="11">
     {label}: {_fmt_money(hi)} peak / {_fmt_money(lo)} trough</text>
-  <text x="{w - pad}" y="16" fill="{line_color}" font-size="11"
-    text-anchor="end">ending {_fmt_money(final)}</text>
+    <text x="{w - pad_x}" y="18" fill="{line_color}" font-size="11"
+        text-anchor="end">ending {_fmt_money(final)}</text>
 </svg>"""
 
 def _render_withdraw_section(config: Config, storage: "BaseStorage") -> str:
