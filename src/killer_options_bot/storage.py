@@ -377,8 +377,17 @@ class BaseStorage:
             )
         return int(row["n"]) if row else 0
 
-    def trades_in_trailing_week(self, as_of: date, strategy: str | None = None) -> int:
-        return self.positions_opened_since(as_of - timedelta(days=7), strategy)
+    def trades_in_current_week(self, as_of: date, strategy: str | None = None) -> int:
+        """Count positions opened Mon-Fri of ``as_of``'s calendar week so far.
+
+        This is a CALENDAR week (Monday through Friday), not a trailing
+        7-day window — a trade opened last Thursday should NOT count against
+        this week's limit; the counter resets every Monday. Positions opened
+        in a prior week that are still open remain open/managed as normal;
+        only NEW entries are gated by this count.
+        """
+        monday = as_of - timedelta(days=as_of.weekday())
+        return self.positions_opened_since(monday, strategy)
 
     def recent_candidates(self, limit: int = 20) -> list[dict]:
         return self._query_all(

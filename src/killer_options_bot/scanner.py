@@ -448,7 +448,7 @@ class Scanner:
         risk = RiskEngine(scfg)
         decision = risk.evaluate(
             contract,
-            trades_this_week=self.storage.trades_in_trailing_week(
+            trades_this_week=self.storage.trades_in_current_week(
                 self.as_of, strategy.name
             ),
             as_of=self.as_of,
