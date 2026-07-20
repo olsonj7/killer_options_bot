@@ -1,3 +1,20 @@
+# =============================================================================
+# ISOLATED TEST CONFIG — never used by Railway/production.
+# =============================================================================
+# Purpose: forward-test a single "back pocket" strategy in isolation WITHOUT
+# touching the shared Supabase forward-test ledger.
+#
+#   * Tier 0 is pinned to ONE strategy under test (see account_tiers below).
+#   * storage.db_path points at a SEPARATE local SQLite file.
+#   * ALWAYS run via scripts/test_isolated.sh, which forces DATABASE_URL="" so
+#     this can never write to shared Supabase. Do NOT run it plain, or your
+#     .env DATABASE_URL would take precedence and pollute production data.
+#
+# To test a different parked strategy, change the tier-0 `strategies:` list
+# below to [swing] or [leaps] (their full definitions already exist further
+# down). Keep it to ONE strategy so results aren't muddied.
+# =============================================================================
+
 # Killer Options Bot configuration.
 # All risk numbers are conservative small-account defaults. Tune carefully.
 
@@ -27,13 +44,16 @@ account_tiers:
     # NOT active yet — adding a third entry source works against the current
     # goal of FEWER, higher-quality trades. Enable it once default/zerodte prove
     # out with the new pickiness gates.
-    strategies: [default, zerodte, reversal_0dte, weekly_reversion]
+    #
+    # ISOLATED TEST: pinned to ONLY the strategy under test. Swap to [swing] or
+    # [leaps] to test those instead (one at a time so results stay clean).
+    strategies: [strat]
     risk:
       max_trade_risk_pct: 0.30
       # Two concurrent slots max on the smallest account. Combined with the
-      # one-position-per-underlying-per-strategy rule, this keeps the book
-      # small and stops correlated stacking (e.g. multiple SPY calls from one
-      # strategy) that turns one weak read into several losses at once.
+      # one-position-per-underlying rule, this keeps the book small and stops
+      # correlated stacking (e.g. multiple SPY calls) that turns one weak read
+      # into several losses at once.
       max_open_positions: 2
     contract_filters:
       min_delta: 0.20
@@ -111,66 +131,6 @@ strategies:
           fraction: 0.5
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
-    limits:
-      # No new 0DTE momentum entries during the low-volume midday chop window.
-      # Toggle in the config UI; off by default so you can enable as needed.
-      skip_midday: false
-  reversal_0dte:
-    # Same-day mean-reversion fade: RSI overbought/oversold extremes snap back
-    # during consolidation. Opposite of zerodte momentum — fires when RSI is
-    # BEYOND the band (> rsi_max = overbought → PUT; < rsi_min = oversold → CALL).
-    signal: intraday_reversal
-    scan_interval_minutes: 2
-    contract_filters:
-      min_dte: 0
-      max_dte: 1
-      min_delta: 0.35
-      max_delta: 0.55
-      max_spread_pct: 0.18
-    exits:
-      # Small target: in consolidation moves are short. Take 25% and get out.
-      profit_target_pct: 0.25
-      # Cut fast on failed reversals — a fade that keeps going is brutal.
-      stop_loss_pct: 0.25
-      max_holding_days: 0
-      min_dte_exit: 0
-      trims:
-        - at_pct: 0.15   # +15%: sell half early
-          fraction: 0.5
-    limits:
-      max_trades_per_day: 2
-      # Reversal is specifically a morning/afternoon-end play.
-      # Midday noise is the enemy of fades — skip it.
-      skip_midday: true
-  weekly_reversion:
-    # Chop-friendly counterpart to "default": the base weekly trade is a
-    # MOMENTUM system (buys continuation), which whipsaws in a range-bound /
-    # consolidating tape. This fades RSI extremes back toward the SMA instead
-    # of chasing direction, using DAILY closes (so it can hold a few days,
-    # unlike reversal_0dte's same-day fade). Mirrors reversal_0dte's logic at
-    # a weekly horizon. Uses the same signal.sma_period/rsi_period/rsi_min/
-    # rsi_max as "default" and reversal_0dte's rsi thresholds.
-    signal: daily_reversal
-    # No need to re-check faster than a normal weekly scan cadence.
-    scan_interval_minutes: 15
-    contract_filters:
-      # Slightly wider DTE than "default" so theta decay is more forgiving
-      # while a reversion move plays out over several days.
-      min_dte: 3
-      max_dte: 10
-      min_delta: 0.25
-      max_delta: 0.40
-      max_spread_pct: 0.12
-    exits:
-      # Bigger target/stop than 0DTE reversal since this holds days, not
-      # minutes — needs room for the reversion move to actually develop.
-      profit_target_pct: 0.35
-      stop_loss_pct: 0.30
-      max_holding_days: 5
-      min_dte_exit: 1
-      trims:
-        - at_pct: 0.20   # +20%: bank half early, let the rest run to target
-          fraction: 0.5
   strat:
     # Price-action day trade distilled from TheSTRAT / smart-money course:
     # enter on a directional STRAT "2" bar (breaks the prior bar's high/low)
@@ -352,7 +312,9 @@ sizing:
   # risk_per_trade_pct: 0.30
 
 storage:
-  db_path: data/killer_options_bot.db
+  # Dedicated LOCAL test database — separate from the production ledger so
+  # isolated test trades never mix with real forward-test data.
+  db_path: data/test_isolated.db
   # Optional hosted Postgres (e.g. Supabase). The DATABASE_URL env var, if set,
   # takes precedence over this value. Leave unset to use the SQLite db_path.
   # database_url: postgresql://postgres:PASSWORD@db.PROJECT.supabase.co:5432/postgres

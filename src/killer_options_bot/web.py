@@ -51,6 +51,24 @@ def _build_data_source(source: str, config: Config) -> MarketData:
     raise ValueError(f"Unknown source: {source}")
 
 
+# Friendly display names for strategy keys shown in the UI (tabs, tables,
+# charts). The internal key (e.g. "default") stays as the storage/config
+# identifier; only the label shown to the user changes here.
+STRATEGY_DISPLAY_NAMES: dict[str, str] = {
+    "default": "Weekly Momentum",
+    "zerodte": "0DTE Momentum",
+    "reversal_0dte": "0DTE Reversal",
+    "weekly_reversion": "Weekly Reversion",
+    "swing": "Swing",
+    "leaps": "LEAPS",
+    "strat": "STRAT Breakout",
+}
+
+
+def _display_strategy_name(name: str) -> str:
+    return STRATEGY_DISPLAY_NAMES.get(name, name.replace("_", " ").title())
+
+
 # Editable config fields: (yaml section, key, label, type, min, max).
 # Only these safe numeric fields are exposed in the UI. Everything else in
 # config.yaml (watchlist, storage paths, etc.) is left untouched on save.
@@ -632,7 +650,7 @@ def _render_strategy_pl_bars(closed: list[PaperPosition]) -> str:
     magnitude = max((abs(v) for _, v in items), default=0.0) or 1.0
 
     w, row_h, pad_x, pad_top = 1040, 30, 120, 14
-    label_w = 96  # left gutter for the strategy name
+    label_w = 150  # left gutter for the strategy name
     axis_x = label_w + (w - label_w - pad_x) / 2  # centre (zero) line
     half = (w - label_w - pad_x) / 2  # pixels available each side of zero
     h = pad_top + row_h * len(items) + 10
@@ -654,7 +672,7 @@ def _render_strategy_pl_bars(closed: list[PaperPosition]) -> str:
             tx, anchor = axis_x - bar_len - 6, "end"
         bars.append(
             f"<text x='{label_w - 10}' y='{cy + 4:.1f}' fill='#c9d1d9' "
-            f"font-size='12' text-anchor='end'>{html.escape(name)}</text>"
+            f"font-size='12' text-anchor='end'>{html.escape(_display_strategy_name(name))}</text>"
             f"<rect x='{bx:.1f}' y='{cy - bar_h / 2:.1f}' width='{bar_len:.1f}' "
             f"height='{bar_h}' rx='2' fill='{color}'/>"
             f"<text x='{tx:.1f}' y='{cy + 4:.1f}' fill='{color}' "
@@ -716,7 +734,7 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
                 f"<td>{html.escape(p.side.value.upper())} {p.strike:g}</td>"
                 f"<td>{p.expiration.isoformat()}</td>"
                 f"<td>{_closed_qty_cell(p)}</td>"
-                f"<td>{html.escape(p.strategy or 'default')}</td>"
+                f"<td>{html.escape(_display_strategy_name(p.strategy or 'default'))}</td>"
                 f"<td>{p.entry_date.isoformat()}</td>"
                 f"<td>{exit_d}</td>"
                 f"<td>{_fmt_money(p.entry_price)} &rarr; "
@@ -824,7 +842,7 @@ def _render_strategy_toggles(config: Config, storage: "BaseStorage") -> str:
             f"<label class='toggle'>"
             f"<input type='checkbox' name='strategy' "
             f"value='{html.escape(s.name)}' {checked}>"
-            f"{html.escape(s.name)} "
+            f"{html.escape(_display_strategy_name(s.name))} "
             f"<span class='{state_cls}'>({state_txt})</span>"
             f"<span class='muted'> &middot; {html.escape(s.signal)}</span>"
             f"</label>"
@@ -871,7 +889,7 @@ def _render_page(
                 f"<td>-</td><td>-</td>"
                 f"<td>{p.holding_days(engine.as_of)}</td>"
                 f"<td>{p.dte(engine.as_of)}</td>"
-                f"<td>{html.escape(p.strategy or 'default')}</td></tr>"
+                f"<td>{html.escape(_display_strategy_name(p.strategy or 'default'))}</td></tr>"
             )
             continue
         upl = p.unrealized_pl(price)
@@ -900,7 +918,7 @@ def _render_page(
             f"<td>{p.holding_days(engine.as_of)}</td>"
             f"<td>{p.expiration.isoformat()}</td>"
             f"<td>{p.dte(engine.as_of)}</td>"
-            f"<td>{html.escape(p.strategy or 'default')}</td>"
+            f"<td>{html.escape(_display_strategy_name(p.strategy or 'default'))}</td>"
             f"<td>{mode_cell}</td></tr>"
         )
 
@@ -1265,7 +1283,7 @@ def _render_config_page(
             return str(getattr(_s.filters, key, ""))
 
         content = _config_fields_html(STRATEGY_EDITABLE_FIELDS, _strat_val, prefix)
-        display_name = strat.name.replace("_", " ").title().replace("Zerodte", "0DTE").replace("0Dte", "0DTE")
+        display_name = _display_strategy_name(strat.name)
         strat_tabs_nav += (
             f"<button type='button' class='tab-btn' "
             f"data-tab='tab-{tab_id}' onclick='switchTab(this)'>"
@@ -1312,7 +1330,7 @@ def _render_config_page(
   <form method="post" action="/config">
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="tab-global" onclick="switchTab(this)">Global</button>
-      <button type="button" class="tab-btn" data-tab="tab-default" onclick="switchTab(this)">Weekly (default)</button>
+      <button type="button" class="tab-btn" data-tab="tab-default" onclick="switchTab(this)">{html.escape(_display_strategy_name('default'))}</button>
       {strat_tabs_nav}
     </div>
     <div id="tab-global" class="tab-panel active">{global_html}</div>

@@ -137,9 +137,10 @@ def test_strategy_pl_bars_render_per_strategy():
     svg = _render_strategy_pl_bars(trades)
     assert "<svg" in svg
     assert "Realized P/L by strategy" in svg
-    # One labelled bar per distinct strategy.
-    assert "default" in svg
-    assert "zerodte" in svg
+    # One labelled bar per distinct strategy (rendered with friendly display
+    # names, not the raw internal strategy key).
+    assert "Weekly Momentum" in svg
+    assert "0DTE Momentum" in svg
     assert svg.count("<rect") == 2
 
 

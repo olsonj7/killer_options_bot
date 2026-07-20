@@ -182,6 +182,50 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     )
 
 
+def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
+    """RSI mean-reversion fade on DAILY closes, for a chop-friendly weekly trade.
+
+    Same idea as ``intraday_reversal_signal`` but evaluated on daily bars (like
+    ``momentum_signal``) so it can hold for several days rather than exiting
+    same-session. Trending/momentum systems tend to whipsaw in a range-bound
+    market; fading RSI extremes back toward the SMA is usually the better fit
+    for that regime, at the cost of missing genuine breakouts.
+
+    - RSI overbought (> rsi_max) + price extended above SMA → buy PUT
+      (fade the high, expect reversion toward the mean)
+    - RSI oversold (< rsi_min) + price extended below SMA → buy CALL
+      (bounce candidate)
+
+    Deliberately has no trend/slope gate (unlike ``momentum_signal``) since a
+    reversion trade is, by definition, betting against the recent direction.
+    """
+    s = cfg.signal
+    ma = sma(quote.closes, s.sma_period)
+    r = rsi(quote.closes, s.rsi_period)
+    if ma is None or r is None:
+        return Signal(None, "Insufficient history for signal")
+
+    upper = ma * (1 + s.trend_buffer_pct)
+    lower = ma * (1 - s.trend_buffer_pct)
+    if quote.last > upper and r > s.rsi_max:
+        return Signal(
+            Side.PUT,
+            f"Reversal fade bearish: last {quote.last:.2f} > SMA{s.sma_period} "
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f}",
+        )
+    if quote.last < lower and r < s.rsi_min:
+        return Signal(
+            Side.CALL,
+            f"Reversal bounce bullish: last {quote.last:.2f} < SMA{s.sma_period} "
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f}",
+        )
+    return Signal(
+        None,
+        f"No reversal edge: last {quote.last:.2f} vs SMA{s.sma_period} "
+        f"{ma:.2f}, RSI {r:.1f}",
+    )
+
+
 def strat_bar_type(bar: Bar, prev: Bar) -> str:
     """Classify ``bar`` relative to ``prev`` using TheSTRAT bar taxonomy.
 
@@ -310,6 +354,7 @@ _SIGNALS = {
     "intraday_momentum": intraday_momentum_signal,
     "strat_breakout": strat_breakout_signal,
     "intraday_reversal": intraday_reversal_signal,
+    "daily_reversal": daily_reversal_signal,
 }
 
 #: Signals that need the current session's intraday bar CLOSES on the quote.

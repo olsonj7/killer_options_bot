@@ -400,7 +400,7 @@ def _build_exits(d: dict) -> ExitConfig:
     return cfg
 
 
-_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout", "intraday_reversal"}
+_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout", "intraday_reversal", "daily_reversal"}
 
 
 
