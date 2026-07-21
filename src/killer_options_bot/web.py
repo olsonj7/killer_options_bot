@@ -617,12 +617,12 @@ def _render_stats_section(closed: list[PaperPosition]) -> str:
   <h2 style="font-size:15px;">Trade stats
     <span class="warn" style="font-weight:400;">(R = multiple of risk; a full stop-out is -1R)</span>
   </h2>
-  <table>
+  <div class="table-wrap"><table>
     <tr><th>Type</th><th>Wins</th><th>Losses</th><th>Total</th>
         <th>Win rate</th><th>Avg P/L %</th><th>Avg winner</th><th>Avg loser</th>
         <th>Risk:Reward</th><th>Total (R)</th></tr>
     {body}
-  </table>
+  </table></div>
 """
 
 
@@ -747,12 +747,12 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
         body = "".join(rows)
     return f"""
   <h2 style="font-size:15px;">Closed trades</h2>
-  <table>
+  <div class="table-wrap"><table>
     <tr><th>Underlying</th><th>Contract</th><th>Expires</th><th>Qty</th><th>Strategy</th><th>Opened</th>
         <th>Closed</th><th>Entry &rarr; Exit</th><th>Realized P/L</th>
         <th>Reason</th></tr>
     {body}
-  </table>
+  </table></div>
 """
 
 
@@ -1049,7 +1049,22 @@ def _render_page(
                  color: #f85149; }}
   .badge-paper {{ background: #30363d; border: 1px solid #484f58;
                   color: #8b949e; }}
-  .oid {{ font-size: 11px; color: #8b949e; }}</style>
+  .oid {{ font-size: 11px; color: #8b949e; }}
+  .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch;
+                 border-radius: 8px; margin-bottom: 28px; }}
+  .table-wrap table {{ margin-bottom: 0; }}
+  @media (max-width: 640px) {{
+    main {{ padding: 14px; }}
+    header {{ padding: 12px 14px; }}
+    h1 {{ font-size: 16px; }}
+    .cards {{ gap: 8px; }}
+    .card {{ flex: 1 1 42%; min-width: 0; padding: 10px 12px; }}
+    .card .value {{ font-size: 17px; }}
+    th, td {{ padding: 6px 8px; font-size: 12px; white-space: nowrap; }}
+    .actions {{ gap: 8px; }}
+    button {{ padding: 8px 12px; font-size: 13px; width: 100%; }}
+    .toggles {{ padding: 10px 12px; gap: 10px; }}
+  }}</style>
 <script>
   // Auto-refresh the read-only dashboard so heartbeat/positions/P&L stay
   // current without a manual reload. Skips reloading while a form control is
@@ -1121,20 +1136,20 @@ def _render_page(
   {withdraw_html}
 
   <h2 style="font-size:15px;">Open positions</h2>
-  <table>
+  <div class="table-wrap"><table>
     <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Strike</th><th>Qty</th><th>Entry</th>
         <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Strategy</th><th>Mode</th></tr>
     {pos_body}
-  </table>
+  </table></div>
 
   {closed_html}
 
   <h2 style="font-size:15px;">Recent candidates</h2>
-  <table>
+  <div class="table-wrap"><table>
     <tr><th>Scanned</th><th>Verdict</th><th>Underlying</th><th>Side</th><th>Strike</th>
         <th>DTE</th><th>Mid</th><th>Cost</th><th>Reasons</th></tr>
     {cand_body}
-  </table>
+  </table></div>
   <div class="warn">This is paper/scan only. No real orders are ever placed.</div>
 </main>
 </body>
@@ -1168,6 +1183,17 @@ def _shared_css() -> str:
            padding: 9px 16px; font-size: 14px; cursor: pointer; margin-top: 16px; }
   button:hover { filter: brightness(1.1); }
   .warn { color: #d29922; font-size: 12px; margin-top: 12px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  @media (max-width: 640px) {
+    main { padding: 14px; }
+    header { padding: 12px 14px; }
+    h1 { font-size: 16px; }
+    .field { flex-wrap: wrap; gap: 4px; }
+    .field input { width: 100%; text-align: left; }
+    .tabs { overflow-x: auto; flex-wrap: nowrap; }
+    .tab-btn { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; }
+    button { width: 100%; }
+  }
 """
 
 

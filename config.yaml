@@ -313,6 +313,21 @@ signal:
   strat_interval: 15min      # one of: 1min, 5min, 15min
   strat_displacement_mult: 1.5
   strat_atr_period: 10
+  # Higher-timeframe trend alignment, used by the daily 'momentum' /
+  # 'daily_reversal' signals ("default" and "weekly_reversion"). Daily closes
+  # are bucketed into weekly_bar_days-day groups to build a synthetic weekly
+  # bar; a CALL is refused while that weekly trend is still down and a PUT is
+  # refused while it is still up. Added after a live PUT fired on a green
+  # weekly bar -- the daily SMA/RSI read was bearish while the weekly trend
+  # had already turned, which is exactly the countertrend entry this blocks.
+  weekly_bar_days: 5
+  weekly_sma_period: 8
+  # Support/resistance guard: refuse a PUT within sr_buffer_pct of the lowest
+  # close over the last sr_lookback daily bars (likely support / bounce zone),
+  # and refuse a CALL within that buffer of the highest close (likely
+  # resistance / rejection zone). 0 disables; set > 0 to arm.
+  sr_lookback: 20
+  sr_buffer_pct: 0.01
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.

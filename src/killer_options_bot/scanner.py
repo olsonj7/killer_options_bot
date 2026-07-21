@@ -39,6 +39,43 @@ def _sma_slope_ok(
     return now > past if up else now < past
 
 
+def _weekly_trend(daily_closes: list[float], bar_days: int, period: int) -> str | None:
+    """Approximate higher-timeframe trend from daily closes.
+
+    Buckets daily closes into ``bar_days``-day groups (a synthetic weekly bar
+    when ``bar_days`` is 5) and compares the most recent bucket's close to a
+    ``period``-bucket SMA. Returns "up", "down", or None when there isn't
+    enough history to decide -- callers must NOT block a trade on None, only
+    on an actual opposing trend.
+    """
+    if bar_days <= 0 or len(daily_closes) < bar_days:
+        return None
+    weekly = list(reversed(daily_closes[::-1][::bar_days]))
+    ma = sma(weekly, period)
+    if ma is None:
+        return None
+    return "up" if weekly[-1] >= ma else "down"
+
+
+def _near_level(
+    closes: list[float], lookback: int, price: float, buffer_pct: float
+) -> str | None:
+    """Flag when ``price`` sits within ``buffer_pct`` of a recent swing level.
+
+    Uses the min/max close over the last ``lookback`` daily bars as a simple
+    support/resistance proxy. Returns "support", "resistance", or None.
+    """
+    if lookback <= 0 or len(closes) < lookback:
+        return None
+    window = closes[-lookback:]
+    lo, hi = min(window), max(window)
+    if lo > 0 and price <= lo * (1 + buffer_pct):
+        return "support"
+    if hi > 0 and price >= hi * (1 - buffer_pct):
+        return "resistance"
+    return None
+
+
 def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     """Very simple momentum gate.
 
@@ -46,7 +83,7 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     Long put when price is below its SMA and RSI is weak.
     Otherwise, no trade.
 
-    Two optional quality gates make it far pickier when configured:
+    Quality gates make it far pickier when configured:
 
     - ``trend_buffer_pct``: price must sit at least this fraction BEYOND the SMA
       (not merely on the right side of it), so borderline noise near the mean
@@ -54,6 +91,12 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     - ``slope_lookback``: the SMA itself must be sloping in the trade direction
       over that many bars, so we only buy calls in a rising trend and puts in a
       falling one.
+    - ``weekly_bar_days`` / ``weekly_sma_period``: refuse to fight an obvious
+      higher-timeframe trend (e.g. no PUT while the synthetic weekly trend is
+      still up).
+    - ``sr_lookback`` / ``sr_buffer_pct``: refuse a PUT sitting at recent
+      support or a CALL sitting at recent resistance, where a bounce/rejection
+      is the more likely next move.
     """
     s = cfg.signal
     ma = sma(quote.closes, s.sma_period)
@@ -68,6 +111,16 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         and s.rsi_min <= r <= s.rsi_max
         and _sma_slope_ok(quote.closes, s.sma_period, s.slope_lookback, up=True)
     ):
+        if _weekly_trend(quote.closes, s.weekly_bar_days, s.weekly_sma_period) == "down":
+            return Signal(
+                None,
+                f"Bullish setup rejected: higher-timeframe trend still down "
+                f"(last {quote.last:.2f} > SMA{s.sma_period} {ma:.2f})",
+            )
+        if _near_level(quote.closes, s.sr_lookback, quote.last, s.sr_buffer_pct) == "resistance":
+            return Signal(
+                None, f"Bullish setup rejected: price {quote.last:.2f} at resistance"
+            )
         return Signal(
             Side.CALL,
             f"Bullish: last {quote.last:.2f} > SMA{s.sma_period} {ma:.2f} "
@@ -79,6 +132,16 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         and r < s.rsi_min
         and _sma_slope_ok(quote.closes, s.sma_period, s.slope_lookback, up=False)
     ):
+        if _weekly_trend(quote.closes, s.weekly_bar_days, s.weekly_sma_period) == "up":
+            return Signal(
+                None,
+                f"Bearish setup rejected: higher-timeframe trend still up "
+                f"(last {quote.last:.2f} < SMA{s.sma_period} {ma:.2f})",
+            )
+        if _near_level(quote.closes, s.sr_lookback, quote.last, s.sr_buffer_pct) == "support":
+            return Signal(
+                None, f"Bearish setup rejected: price {quote.last:.2f} at support"
+            )
         return Signal(
             Side.PUT,
             f"Bearish: last {quote.last:.2f} < SMA{s.sma_period} {ma:.2f} "

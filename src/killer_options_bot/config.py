@@ -58,6 +58,20 @@ class SignalConfig:
     strat_interval: str = "15min"
     strat_displacement_mult: float = 1.5
     strat_atr_period: int = 10
+    # Higher-timeframe trend alignment (used by 'momentum'/'daily_reversal').
+    # If > 0, daily closes are bucketed into ``weekly_bar_days``-day groups to
+    # build a synthetic weekly series; a CALL is refused while that weekly
+    # trend is still down and a PUT is refused while it is still up. This
+    # stops the daily signal from fighting an obvious higher-timeframe trend
+    # (e.g. shorting into a green weekly bar). 0 disables (default).
+    weekly_bar_days: int = 0
+    weekly_sma_period: int = 8
+    # Support/resistance guard. If > 0, refuse a PUT within ``sr_buffer_pct``
+    # of the lowest close over the last ``sr_lookback`` daily bars (likely
+    # support / bounce zone) and refuse a CALL within that buffer of the
+    # highest close (likely resistance / rejection zone). 0 disables (default).
+    sr_lookback: int = 0
+    sr_buffer_pct: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -509,6 +523,10 @@ def load_config(
             signal.get("strat_displacement_mult", 1.5)
         ),
         strat_atr_period=int(signal.get("strat_atr_period", 10)),
+        weekly_bar_days=int(signal.get("weekly_bar_days", 0)),
+        weekly_sma_period=int(signal.get("weekly_sma_period", 8)),
+        sr_lookback=int(signal.get("sr_lookback", 0)),
+        sr_buffer_pct=float(signal.get("sr_buffer_pct", 0.01)),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(
