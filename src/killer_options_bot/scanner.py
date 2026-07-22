@@ -503,6 +503,18 @@ class Scanner:
         if signal.side is None:
             return None
 
+        # Cadence-mates (e.g. "default" and "weekly_reversion" share a
+        # conflict_group) must not hold opposite sides on the same name at
+        # once -- a same-account PUT+CALL straddle just cancels itself out.
+        if strategy.conflict_group:
+            siblings = [
+                s.name
+                for s in self.config.active_strategies
+                if s.conflict_group == strategy.conflict_group
+            ]
+            if self.storage.has_open_opposite_side(symbol, signal.side, siblings):
+                return None
+
         chain = self.data.get_option_chain(symbol, signal.side)
         contract = _best_contract(chain, scfg, self.as_of)
         if contract is None:

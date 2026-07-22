@@ -2,8 +2,10 @@
 # All risk numbers are conservative small-account defaults. Tune carefully.
 
 account:
-  # Your account size in dollars. Used to size and reject trades.
-  value: 1000.0
+  # Your account size in dollars. Used to size and reject trades. Bump this
+  # (and withdraw.starting_capital below) whenever you add/remove cash from
+  # the account -- e.g. $1000 initial deposit + $1200 added = $2200.
+  value: 2200.0
 
 # Account-size tiers: the strategy "bends" automatically with account value.
 # The tier with the greatest min_value that is <= account.value is applied, and
@@ -75,6 +77,11 @@ strategies:
     # The base weekly momentum trade. Only its scan cadence is set here; its
     # filters/exits come from the base (tier-adjusted) config sections below.
     scan_interval_minutes: 15
+    # Shared with "weekly_reversion": both hold for about a week, so the bot
+    # must never have one open a PUT while the other holds a CALL (or vice
+    # versa) on the same underlying -- that's not a hedge, it's two opposing
+    # weekly bets cancelling each other out. See config.py StrategyConfig.
+    conflict_group: weekly
   zerodte:
     # Same-day / next-day expiries. Needs real delta to move, wider spreads
     # tolerated, fast profit-take, hard same-day exit (max_holding_days: 0).
@@ -153,6 +160,10 @@ strategies:
     signal: daily_reversal
     # No need to re-check faster than a normal weekly scan cadence.
     scan_interval_minutes: 15
+    # See "default" above: shares a conflict_group so the two weekly-cadence
+    # strategies never fight each other with opposite-side positions on the
+    # same underlying.
+    conflict_group: weekly
     contract_filters:
       # Slightly wider DTE than "default" so theta decay is more forgiving
       # while a reversion move plays out over several days.
@@ -390,22 +401,26 @@ withdraw:
   # cash off the table, based on your realized (banked) P/L. Set enabled: true
   # to see recommendations on the dashboard and via `killer-options-bot withdraw`.
   enabled: true
-  # Your original deposit. 0 = fall back to account.value. Equity is measured as
+  # Your total net deposits (all money put in, minus any withdrawn) -- NOT a
+  # one-time "original" figure. 0 = fall back to account.value. Bump this each
+  # time you add or remove cash so gains stay measured above the right base.
+  # Currently $1000 initial + $1200 added = $2200. Equity is measured as
   # starting_capital + realized P/L, and gains are measured above this.
-  starting_capital: 1000.0
+  starting_capital: 2200.0
   # Profit rules never recommend leaving less than this in the account, so it can
   # keep trading. 0 = fall back to starting_capital (never dip into principal).
-  min_trading_balance: 1000.0
+  min_trading_balance: 2200.0
   # On each NEW equity high, skim this fraction of gains into savings. 0 = off.
   skim_pct: 0.25
   # Set aside this fraction of realized profit for taxes (short-term = ordinary
   # income). This is a "reserve", not a spend. 0 = off.
   tax_reserve_pct: 0.30
   # Milestone ladder: when equity reaches `at`, suggest withdrawing `withdraw`.
-  # Highest reached rung is shown. Empty list = off.
+  # Highest reached rung is shown. Empty list = off. Rungs must sit ABOVE
+  # starting_capital ($2,200) or they trigger immediately on the next scan.
   milestones:
-    - {at: 2000.0, withdraw: 1000.0}   # get your original stake back out
-    - {at: 5000.0, withdraw: 1500.0}
+    - {at: 3000.0, withdraw: 1000.0}   # first profit checkpoint above deposits
+    - {at: 6000.0, withdraw: 1500.0}
   # Defensive de-risking: if equity falls this fraction below its peak, suggest
   # pulling drawdown_defense_pct of equity to cash. 0 = off. May go below the
   # trading floor on purpose (the point is to stop trading).

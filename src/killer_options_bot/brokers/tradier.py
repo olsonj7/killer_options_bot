@@ -8,6 +8,7 @@ API reference: https://documentation.tradier.com/brokerage-api
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta
 
 import requests
@@ -25,7 +26,8 @@ class TradierMarketData:
         self,
         api_token: str,
         base_url: str = "https://sandbox.tradier.com/v1",
-        timeout: float = 10.0,
+        timeout: float = 20.0,
+        retries: int = 2,
     ):
         if not api_token:
             raise TradierError(
@@ -33,6 +35,11 @@ class TradierMarketData:
             )
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Extra attempts (beyond the first) on a network-level timeout or
+        # connection error. Tradier occasionally stalls on a single request
+        # under load; a quick retry recovers the scan without waiting a full
+        # tick for the run loop's own outer retry.
+        self.retries = max(0, retries)
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -43,7 +50,19 @@ class TradierMarketData:
 
     def _get(self, path: str, params: dict) -> dict:
         url = f"{self.base_url}{path}"
-        resp = self.session.get(url, params=params, timeout=self.timeout)
+        attempt = 0
+        while True:
+            try:
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+                break
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                if attempt >= self.retries:
+                    raise TradierError(
+                        f"Tradier {path} timed out after "
+                        f"{attempt + 1} attempt(s): {exc}"
+                    ) from exc
+                attempt += 1
+                time.sleep(0.5 * attempt)  # brief backoff before retrying
         if resp.status_code != 200:
             raise TradierError(
                 f"Tradier {path} returned {resp.status_code}: {resp.text[:200]}"

@@ -476,15 +476,22 @@ def _equity_curve_svg(
         text-anchor="end">ending {_fmt_money(final)}</text>
 </svg>"""
 
-def _render_withdraw_section(config: Config, storage: "BaseStorage") -> str:
+def _render_withdraw_section(
+    config: Config, storage: "BaseStorage", unrealized: float = 0.0
+) -> str:
     """Render the withdrawal advisor block, or nothing when disabled."""
     if not config.withdraw.enabled:
         return ""
     advice = advise_from_storage(config.withdraw, storage)
+    total_balance = advice.equity + unrealized
 
     cards = (
-        f"<div class='card'><div class='label'>Equity (banked)</div>"
+        f"<div class='card'><div class='label'>Total balance</div>"
+        f"<div class='value'>{_fmt_money(total_balance)}</div></div>"
+        f"<div class='card'><div class='label'>Total realized</div>"
         f"<div class='value'>{_fmt_money(advice.equity)}</div></div>"
+        f"<div class='card'><div class='label'>Total unrealized</div>"
+        f"<div class='value'>{_fmt_money(unrealized)}</div></div>"
         f"<div class='card'><div class='label'>Peak</div>"
         f"<div class='value'>{_fmt_money(advice.peak_equity)}</div></div>"
         f"<div class='card'><div class='label'>Gain</div>"
@@ -887,6 +894,7 @@ def _render_page(
                 f"<td>{html.escape(p.side.value.upper())}</td>"
                 f"<td>{p.strike:g}</td>"
                 f"<td>{qty_txt}</td>"
+                f"<td>{p.entry_date.isoformat()}</td>"
                 f"<td>{_fmt_money(p.entry_price)}</td>"
                 f"<td>-</td><td>-</td>"
                 f"<td>{p.holding_days(engine.as_of)}</td>"
@@ -914,6 +922,7 @@ def _render_page(
             f"<td>{html.escape(p.side.value.upper())}</td>"
             f"<td>{p.strike:g}</td>"
             f"<td>{qty_txt}</td>"
+            f"<td>{p.entry_date.isoformat()}</td>"
             f"<td>{_fmt_money(p.entry_price)}</td>"
             f"<td>{_fmt_money(price)}</td>"
             f"<td class='{cls}'>{pl_txt}</td>"
@@ -962,7 +971,7 @@ def _render_page(
     )
     pos_body = (
         "".join(pos_rows)
-        or "<tr><td colspan='13' class='muted'>No open positions.</td></tr>"
+        or "<tr><td colspan='14' class='muted'>No open positions.</td></tr>"
     )
     cand_body = (
         "".join(cand_rows)
@@ -971,7 +980,7 @@ def _render_page(
     max_risk = config.account_value * config.risk.max_trade_risk_pct
     equity_svg = _equity_curve_svg(closed, unrealized=unrealized)
 
-    withdraw_html = _render_withdraw_section(config, storage)
+    withdraw_html = _render_withdraw_section(config, storage, unrealized)
     stats_html = _render_stats_section(closed)
     strategy_pl_html = _render_strategy_pl_bars(closed)
     closed_html = _render_closed_trades(closed)
@@ -1137,7 +1146,7 @@ def _render_page(
 
   <h2 style="font-size:15px;">Open positions</h2>
   <div class="table-wrap"><table>
-    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Strike</th><th>Qty</th><th>Entry</th>
+    <tr><th>Contract</th><th>Underlying</th><th>Side</th><th>Strike</th><th>Qty</th><th>Opened</th><th>Entry</th>
         <th>Mark</th><th>Unreal P/L</th><th>Held</th><th>Expires</th><th>DTE</th><th>Strategy</th><th>Mode</th></tr>
     {pos_body}
   </table></div>

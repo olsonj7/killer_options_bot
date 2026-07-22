@@ -177,6 +177,12 @@ class StrategyConfig:
     #: low-volume chop window where both momentum and reversal signals are
     #: noisiest. Exit management still runs; only entries are suppressed.
     skip_midday: bool = False
+    #: Optional label shared by strategies that should never hold opposite
+    #: sides (a PUT and a CALL) on the same underlying at once, even though
+    #: they are independent strategies (e.g. "default" and "weekly_reversion"
+    #: both hold for about a week -- a countertrend bet from one fighting the
+    #: other's live position is a wash, not a hedge). None disables the check.
+    conflict_group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -554,6 +560,7 @@ def load_config(
     # (tier-adjusted) sections. "default" is always available and mirrors the
     # base weekly trade. A tier's optional 'strategies' list selects which
     # profiles are active for that account size (higher tiers unlock more).
+    default_prof = (raw.get("strategies", {}) or {}).get("default") or {}
     registry: dict[str, StrategyConfig] = {
         "default": StrategyConfig(
             name="default",
@@ -561,15 +568,12 @@ def load_config(
             filters=filters_cfg,
             exits=exits_cfg,
             scan_interval_minutes=int(
-                (raw.get("strategies", {}) or {}).get("default", {}).get(
-                    "scan_interval_minutes", 5
-                )
+                default_prof.get("scan_interval_minutes", 5)
             ),
             max_trades_per_day=int(
-                ((raw.get("strategies", {}) or {}).get("default") or {}).get(
-                    "limits", {}
-                ).get("max_trades_per_day", 0)
+                (default_prof.get("limits") or {}).get("max_trades_per_day", 0)
             ),
+            conflict_group=default_prof.get("conflict_group"),
         )
     }
     for name, prof in (raw.get("strategies", {}) or {}).items():
@@ -601,6 +605,7 @@ def load_config(
             scan_interval_minutes=interval,
             max_trades_per_day=max_trades_per_day,
             skip_midday=skip_midday,
+            conflict_group=prof.get("conflict_group"),
         )
 
     if tier and tier.get("strategies") is not None:

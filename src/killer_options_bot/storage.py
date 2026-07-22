@@ -586,6 +586,29 @@ class BaseStorage:
             )
         return bool(row and int(row["n"]) > 0)
 
+    def has_open_opposite_side(
+        self, underlying: str, side: "Side", strategies: list[str]
+    ) -> bool:
+        """True if an open position on ``underlying`` with the OPPOSITE side
+        exists, opened by one of ``strategies``.
+
+        Used to stop cadence-mates (e.g. the weekly momentum and weekly
+        reversion strategies, both sharing a ``conflict_group``) from holding
+        a PUT and a CALL on the same name at once -- a same-account straddle
+        that just cancels itself out rather than a real hedge.
+        """
+        if not strategies:
+            return False
+        opposite = Side.PUT.value if side == Side.CALL else Side.CALL.value
+        placeholders = ",".join("?" for _ in strategies)
+        row = self._query_one(
+            f"SELECT COUNT(*) AS n FROM positions "
+            f"WHERE status = ? AND underlying = ? AND side = ? "
+            f"AND strategy IN ({placeholders})",
+            (PositionStatus.OPEN.value, underlying, opposite, *strategies),
+        )
+        return bool(row and int(row["n"]) > 0)
+
     def all_positions(self, limit: int = 100) -> list[PaperPosition]:
         rows = self._query_all(
             "SELECT * FROM positions ORDER BY id DESC LIMIT ?",

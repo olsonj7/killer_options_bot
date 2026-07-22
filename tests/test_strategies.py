@@ -100,6 +100,27 @@ def test_strategy_overlays_base_and_keeps_unset_keys(tmp_path):
     assert zdte.filters.max_spread_pct == 0.15
 
 
+def test_conflict_group_parsed_for_named_and_default_strategies(tmp_path):
+    strategies = dict(_ZERODTE)
+    strategies["default"] = {"conflict_group": "weekly"}
+    strategies["zerodte"] = dict(strategies["zerodte"], conflict_group="weekly")
+    cfg = load_config(
+        _write(
+            tmp_path,
+            1000.0,
+            tiers=[{"min_value": 0, "strategies": ["default", "zerodte"]}],
+            strategies=strategies,
+        )
+    )
+    names = {s.name: s.conflict_group for s in cfg.active_strategies}
+    assert names == {"default": "weekly", "zerodte": "weekly"}
+
+
+def test_conflict_group_defaults_to_none(tmp_path):
+    cfg = load_config(_write(tmp_path, 1000.0))
+    assert cfg.active_strategies[0].conflict_group is None
+
+
 def test_unknown_strategy_name_raises(tmp_path):
     path = _write(
         tmp_path,
