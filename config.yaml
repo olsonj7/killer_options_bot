@@ -82,6 +82,16 @@ strategies:
     # versa) on the same underlying -- that's not a hedge, it's two opposing
     # weekly bets cancelling each other out. See config.py StrategyConfig.
     conflict_group: weekly
+    contract_filters:
+      # Tighter than the base 0.12: this strategy holds for days, so a wide
+      # spread on entry makes it easy for the mid to gap straight past the
+      # stop between 60s manage ticks. Narrower spreads = less slippage risk.
+      max_spread_pct: 0.08
+    limits:
+      # One entry per underlying per day: without this, a stopped-out weekly
+      # position could re-enter the same underlying same-day and chase the
+      # whipsaw (observed live: 3 QQQ puts opened/closed in a single session).
+      max_trades_per_day: 1
   zerodte:
     # Same-day / next-day expiries. Needs real delta to move, wider spreads
     # tolerated, fast profit-take, hard same-day exit (max_holding_days: 0).
@@ -164,6 +174,9 @@ strategies:
     # strategies never fight each other with opposite-side positions on the
     # same underlying.
     conflict_group: weekly
+    limits:
+      # Same overtrading guard as "default": one entry per underlying per day.
+      max_trades_per_day: 1
     contract_filters:
       # Slightly wider DTE than "default" so theta decay is more forgiving
       # while a reversion move plays out over several days.
@@ -171,7 +184,9 @@ strategies:
       max_dte: 10
       min_delta: 0.25
       max_delta: 0.40
-      max_spread_pct: 0.12
+      # Tighter than the base 0.12 -- see "default" above for the reasoning
+      # (narrower spreads reduce mid-price gaps past the stop between ticks).
+      max_spread_pct: 0.08
     exits:
       # Bigger target/stop than 0DTE reversal since this holds days, not
       # minutes — needs room for the reversion move to actually develop.
