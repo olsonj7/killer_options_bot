@@ -88,6 +88,19 @@ class OptionContract:
         return round((self.bid + self.ask) / 2, 4)
 
     @property
+    def has_quote(self) -> bool:
+        """False when the broker returned no live pricing at all.
+
+        Tradier occasionally returns bid=ask=last=0/None for a contract (a
+        stale row, a temporary data gap) rather than omitting it. Treating
+        that as a real $0 mid looks like a 100% loss to the exit-rule check
+        and force-closes the position at a fake total wipeout. Callers should
+        skip managing (or fall back to intrinsic settlement at/after
+        expiry) when this is False rather than trust ``mid`` here.
+        """
+        return self.bid > 0 or self.ask > 0 or self.last > 0
+
+    @property
     def spread_pct(self) -> float:
         """Bid/ask spread as a fraction of the mid price."""
         mid = self.mid

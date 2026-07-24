@@ -243,6 +243,92 @@ def test_stop_loss_exit(tmp_path):
     assert "stop loss" in engine.exit_reason(pos, 0.50)
 
 
+class _DeadQuoteData:
+    """A data source whose option chain returns a live-looking contract with
+    bid=ask=last=0/None -- the broker "dead quote" case that used to be
+    misread as a real $0 mid (a fake 100% loss)."""
+
+    def __init__(self, contract: OptionContract, underlying_last: float = 150.0):
+        self._contract = contract
+        self._underlying_last = underlying_last
+
+    def get_quote(self, symbol):
+        from killer_options_bot.models import Quote
+
+        return Quote(symbol=symbol, last=self._underlying_last)
+
+    def get_option_chain(self, symbol, side):
+        return [self._contract]
+
+
+def _dead_contract(as_of: date, expiration_offset: int = 45) -> OptionContract:
+    return OptionContract(
+        symbol="X",
+        underlying="AAPL",
+        side=Side.CALL,
+        strike=150.0,
+        expiration=as_of + timedelta(days=expiration_offset),
+        bid=0.0,
+        ask=0.0,
+        last=0.0,
+        delta=0.40,
+        implied_volatility=0.30,
+        volume=0,
+        open_interest=0,
+    )
+
+
+def test_dead_quote_does_not_force_close_open_position(tmp_path):
+    # A live position (not yet at expiry) whose contract comes back with
+    # bid=ask=last=0 must NOT be force-closed as a fake "stop loss hit
+    # (-100%)" -- there's no real price here, so the tick is a no-op.
+    config = make_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _position(as_of, 1.00)
+    storage.open_position(pos)
+    data = _DeadQuoteData(_dead_contract(as_of))
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+
+    result = engine.manage_all()[0]
+
+    assert result.closed is False
+    assert result.price is None
+    assert storage.open_positions()[0].status == PositionStatus.OPEN
+
+
+def test_dead_quote_at_expiry_settles_at_intrinsic(tmp_path):
+    # At/after expiry, a dead quote still falls back to intrinsic settlement
+    # from the underlying (existing, correct behavior) rather than the fake
+    # -100% stop-loss path.
+    config = make_config(tmp_path)
+    entry = date(2026, 1, 1)
+    later = entry + timedelta(days=45)
+    storage = Storage(config.db_path)
+    pos = _position(entry, 1.00)
+    storage.open_position(pos)
+    data = _DeadQuoteData(_dead_contract(entry, expiration_offset=0), underlying_last=160.0)
+    engine = PaperEngine(config, data, storage, as_of=later)
+
+    result = engine.manage_all()[0]
+
+    assert result.closed is True
+    assert result.reason == "expired at intrinsic"
+    assert result.price == 10.0  # max(0, 160 - 150) intrinsic
+
+
+def test_mark_to_market_returns_none_for_dead_quote(tmp_path):
+    config = make_config(tmp_path)
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _position(as_of, 1.00)
+    storage.open_position(pos)
+    data = _DeadQuoteData(_dead_contract(as_of))
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+
+    assert engine.mark_to_market(storage.open_positions()[0]) is None
+
+
 def test_max_holding_days_exit(tmp_path):
     config = make_config(tmp_path)  # max_holding_days 21
     entry = date(2026, 1, 1)

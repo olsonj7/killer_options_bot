@@ -278,10 +278,14 @@ class PaperEngine:
         contract = _find_contract(
             self.data, position.underlying, position.side, position.option_symbol
         )
-        if contract is None:
-            # The option is no longer quoted (typically at/after expiration).
-            # Settle at intrinsic value from the underlying rather than assuming
-            # a total loss: an option held to expiry realizes max(0, intrinsic).
+        if contract is None or not contract.has_quote:
+            # No contract match, or the broker returned a dead quote (bid=
+            # ask=last=0/None). Either way there is no real price to act on
+            # here -- treat it the same as "not quoted" (typically at/after
+            # expiration). Settle at intrinsic value from the underlying
+            # rather than assuming a total loss: an option held to expiry
+            # realizes max(0, intrinsic), and a mid-tick data gap must not be
+            # read as a fake 100% stop-loss.
             if position.dte(self.as_of) <= 0:
                 last = self.data.get_quote(position.underlying).last
                 if position.side is Side.CALL:
@@ -341,14 +345,18 @@ class PaperEngine:
         contract = _find_contract(
             self.data, position.underlying, position.side, position.option_symbol
         )
-        return contract.mid if contract else None
+        if contract is None or not contract.has_quote:
+            return None
+        return contract.mid
 
     def exit_fill_price(self, position: PaperPosition) -> float | None:
         """Cost-aware price to close a position now (for forced closes)."""
         contract = _find_contract(
             self.data, position.underlying, position.side, position.option_symbol
         )
-        return self._exit_price(contract) if contract else None
+        if contract is None or not contract.has_quote:
+            return None
+        return self._exit_price(contract)
 
     def realized_pl_total(self) -> float:
         closed = sum(
