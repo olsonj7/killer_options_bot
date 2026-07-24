@@ -22,6 +22,21 @@ def _parse_as_of(args: argparse.Namespace) -> date | None:
     return date.fromisoformat(value)
 
 
+def current_account_value(base_account_value: float, storage) -> float:
+    """Deposit basis + realized P/L to date -- what's actually tradeable now.
+
+    Includes profit already banked from partial trims on still-open runners
+    (that cash is real even though the position itself hasn't fully closed).
+    A drawdown shrinks the figure used for position sizing/risk budgeting; a
+    gain grows it. ``base_account_value`` must be the raw config/DB-override
+    value, not a previously-adjusted one, or repeated calls would compound.
+    """
+    realized = sum(
+        p.realized_pl() or 0.0 for p in storage.closed_positions()
+    ) + sum(p.realized_pl_banked for p in storage.open_positions())
+    return base_account_value + realized
+
+
 def _build_data_source(
     source: str, config: Config, as_of: date | None = None
 ) -> MarketData:
@@ -658,6 +673,7 @@ def run_loop(
     (market-open) cycles completed.
     """
     import time as _time
+    from dataclasses import replace
     from datetime import datetime
 
     from killer_options_bot import market
@@ -666,6 +682,11 @@ def run_loop(
     storage = get_storage(config)
     tick = max(1, int(tick))
     strategies = list(config.active_strategies)
+    # The raw deposit-basis account value as loaded from config/DB overrides,
+    # kept separate from ``config.account_value`` (which gets overwritten each
+    # tick below with current equity). Re-deriving from this base each time
+    # avoids compounding realized P/L onto an already-adjusted number.
+    base_account_value = config.account_value
 
     log(
         f"Run loop starting: source={source}, tick={tick}s, "
@@ -755,10 +776,27 @@ def run_loop(
                 _sov = storage.get_strategy_config_overrides()
                 if _ov or _sov:
                     config = load_config(config_path, _ov or None, _sov or None)
+                    base_account_value = config.account_value
                     # Activate any strategies that were added by the new config.
                     for _s in config.active_strategies:
                         next_scan.setdefault(_s.name, 0.0)
                     strategies = list(config.active_strategies)
+            except Exception:
+                pass
+
+            # Size new positions off what's actually available to trade with,
+            # not the static deposit total in config.yaml: account_value here
+            # becomes starting deposits + realized P/L to date (banked trims
+            # on still-open runners count too), so a drawdown shrinks position
+            # size/risk budget and a gain grows it. Always re-derived from
+            # ``base_account_value`` (not the previous tick's config) so this
+            # does not compound. This does NOT touch withdraw.starting_capital
+            # (the withdrawal advisor's own basis).
+            try:
+                config = replace(
+                    config,
+                    account_value=current_account_value(base_account_value, storage),
+                )
             except Exception:
                 pass
 

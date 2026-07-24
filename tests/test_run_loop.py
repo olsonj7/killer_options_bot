@@ -159,6 +159,74 @@ def test_resolve_run_loop_flag_only():
     assert _resolve_run_loop(None, False) == (False, None)
 
 
+# --- current_account_value (available balance reflects realized P/L) -------
+
+
+def test_current_account_value_reflects_realized_loss(tmp_path):
+    from datetime import date, timedelta
+
+    from killer_options_bot.cli import current_account_value
+    from killer_options_bot.models import PaperPosition, PositionStatus, Side
+    from killer_options_bot.storage import Storage
+
+    storage = Storage(str(tmp_path / "eq.db"))
+    as_of = date(2026, 1, 1)
+    pos = PaperPosition(
+        option_symbol="X",
+        underlying="AAPL",
+        side=Side.CALL,
+        strike=150.0,
+        expiration=as_of + timedelta(days=10),
+        quantity=1,
+        entry_price=5.00,
+        entry_date=as_of,
+    )
+    storage.open_position(pos)
+    opened = storage.open_positions()[0]
+    storage.close_position(opened.id, 0.0, as_of, "stop loss hit (-100%)")
+
+    # $500 realized loss on a $2300 base -> $1800 available, not $2300.
+    assert current_account_value(2300.0, storage) == 1800.0
+
+
+def test_current_account_value_includes_banked_trim_profit(tmp_path):
+    from datetime import date, timedelta
+
+    from killer_options_bot.cli import current_account_value
+    from killer_options_bot.models import PaperPosition, PositionStatus, Side
+    from killer_options_bot.storage import Storage
+
+    storage = Storage(str(tmp_path / "eq2.db"))
+    as_of = date(2026, 1, 1)
+    pos = PaperPosition(
+        option_symbol="X",
+        underlying="AAPL",
+        side=Side.CALL,
+        strike=150.0,
+        expiration=as_of + timedelta(days=10),
+        quantity=1,
+        entry_price=5.00,
+        entry_date=as_of,
+    )
+    storage.open_position(pos)
+    opened = storage.open_positions()[0]
+    # Bank $100 from a partial trim; the position stays open.
+    storage.reduce_position(opened.id, opened.quantity, 100.0, 1)
+
+    assert current_account_value(2300.0, storage) == 2400.0
+
+
+def test_current_account_value_does_not_compound(tmp_path):
+    """Calling it repeatedly with the same base must not double-count."""
+    from killer_options_bot.cli import current_account_value
+    from killer_options_bot.storage import Storage
+
+    storage = Storage(str(tmp_path / "eq3.db"))
+    first = current_account_value(2300.0, storage)
+    second = current_account_value(2300.0, storage)
+    assert first == second == 2300.0
+
+
 def test_resolve_run_loop_env_truthy_enables():
     from killer_options_bot.cli import _resolve_run_loop
 
