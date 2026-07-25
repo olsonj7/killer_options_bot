@@ -34,6 +34,17 @@ class Dialect:
     real: str
 
 
+def _now_et_time() -> str:
+    """Current wall-clock time in the market's timezone, as \"HH:MM:SS\".
+
+    Used to stamp entry_time/exit_time at the moment a position is opened or
+    closed -- real wall-clock time, not simulated/backtested.
+    """
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S")
+
+
 SQLITE = Dialect(
     placeholder="?",
     autoincrement="INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -88,6 +99,8 @@ CREATE TABLE IF NOT EXISTS positions (
     trims_done INTEGER NOT NULL DEFAULT 0,
     high_water_mark {d.real},
     broker_order_id TEXT,
+    entry_time TEXT,
+    exit_time TEXT,
     exit_price {d.real},
     exit_date TEXT,
     exit_reason TEXT
@@ -193,6 +206,12 @@ class BaseStorage:
                     f"ALTER TABLE positions ADD COLUMN high_water_mark "
                     f"{self.dialect.real}"
                 )
+        if cols and "entry_time" not in cols:
+            with self._connect() as conn:
+                conn.execute("ALTER TABLE positions ADD COLUMN entry_time TEXT")
+        if cols and "exit_time" not in cols:
+            with self._connect() as conn:
+                conn.execute("ALTER TABLE positions ADD COLUMN exit_time TEXT")
 
     # --- Runtime state (cross-process key/value) ---------------------------
 
@@ -450,6 +469,8 @@ class BaseStorage:
                 if row.get("high_water_mark") is not None
                 else None
             ),
+            entry_time=row.get("entry_time"),
+            exit_time=row.get("exit_time"),
         )
 
     def open_position(
@@ -465,8 +486,8 @@ class BaseStorage:
                 quantity, entry_price, entry_date, status, mode,
                 broker_order_id, exit_price, exit_date, exit_reason, strategy,
                 original_quantity, realized_pl_banked, trims_done,
-                high_water_mark
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                high_water_mark, entry_time
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 position.option_symbol,
@@ -488,6 +509,7 @@ class BaseStorage:
                 position.realized_pl_banked,
                 position.trims_done,
                 position.high_water_mark,
+                position.entry_time or _now_et_time(),
             ),
         )
         return position.id
@@ -528,7 +550,8 @@ class BaseStorage:
         self._execute(
             """
             UPDATE positions
-            SET status = ?, exit_price = ?, exit_date = ?, exit_reason = ?
+            SET status = ?, exit_price = ?, exit_date = ?, exit_reason = ?,
+                exit_time = ?
             WHERE id = ?
             """,
             (
@@ -536,6 +559,7 @@ class BaseStorage:
                 exit_price,
                 exit_date.isoformat(),
                 exit_reason,
+                _now_et_time(),
                 position_id,
             ),
         )

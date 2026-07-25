@@ -87,3 +87,23 @@ def test_realized_pl_since_ignores_paper(tmp_path):
     storage.open_position(pos, mode="paper")
     storage.close_position(pos.id, 0.50, as_of, "stop loss")
     assert storage.realized_pl_since(as_of, mode="live") == 0.0
+
+
+def test_open_and_close_position_stamp_entry_exit_time(tmp_path):
+    """entry_time/exit_time are populated with real wall-clock HH:MM:SS."""
+    config = make_config(tmp_path)
+    storage = SQLiteStorage(config.db_path)
+    as_of = date(2026, 1, 1)
+    pos = _position(as_of, 1.00, 0.0)
+    storage.open_position(pos)
+
+    [reloaded] = storage.open_positions()
+    assert reloaded.entry_time is not None
+    assert len(reloaded.entry_time) == 8  # "HH:MM:SS"
+    assert reloaded.exit_time is None
+
+    storage.close_position(pos.id, 0.50, as_of, "stop loss")
+    [closed] = storage.closed_positions()
+    assert closed.exit_time is not None
+    assert len(closed.exit_time) == 8
+

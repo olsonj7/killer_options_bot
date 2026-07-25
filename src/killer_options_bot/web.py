@@ -721,6 +721,19 @@ def _closed_qty_cell(p: PaperPosition) -> str:
     return str(orig)
 
 
+def _fmt_date_time(d, t: str | None) -> str:
+    """"YYYY-MM-DD HH:MM" when a time is on record, else just the date.
+
+    Positions opened before entry_time/exit_time were added have no stored
+    time; those show the bare date rather than a misleading placeholder.
+    """
+    if d is None:
+        return "-"
+    if not t:
+        return d.isoformat()
+    return f"{d.isoformat()} {t[:5]}"
+
+
 def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
     """Table of individual past (closed) trades, most recent first."""
     if not closed:
@@ -736,7 +749,6 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
             pct = 0.0
             if p.exit_price is not None and p.entry_price > 0:
                 pct = (p.exit_price - p.entry_price) / p.entry_price
-            exit_d = p.exit_date.isoformat() if p.exit_date else "-"
             reason = html.escape(p.exit_reason or "")
             rows.append(
                 f"<tr><td>{html.escape(p.underlying)}</td>"
@@ -744,8 +756,8 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
                 f"<td>{p.expiration.isoformat()}</td>"
                 f"<td>{_closed_qty_cell(p)}</td>"
                 f"<td>{html.escape(_display_strategy_name(p.strategy or 'default'))}</td>"
-                f"<td>{p.entry_date.isoformat()}</td>"
-                f"<td>{exit_d}</td>"
+                f"<td>{_fmt_date_time(p.entry_date, p.entry_time)}</td>"
+                f"<td>{_fmt_date_time(p.exit_date, p.exit_time)}</td>"
                 f"<td>{_fmt_money(p.entry_price)} &rarr; "
                 f"{_fmt_money(p.exit_price or 0.0)}</td>"
                 f"<td class='{cls}'>{_fmt_money(pl)} ({pct:+.0%})</td>"
@@ -894,7 +906,7 @@ def _render_page(
                 f"<td>{html.escape(p.side.value.upper())}</td>"
                 f"<td>{p.strike:g}</td>"
                 f"<td>{qty_txt}</td>"
-                f"<td>{p.entry_date.isoformat()}</td>"
+                f"<td>{_fmt_date_time(p.entry_date, p.entry_time)}</td>"
                 f"<td>{_fmt_money(p.entry_price)}</td>"
                 f"<td>-</td><td>-</td>"
                 f"<td>{p.holding_days(engine.as_of)}</td>"
@@ -922,7 +934,7 @@ def _render_page(
             f"<td>{html.escape(p.side.value.upper())}</td>"
             f"<td>{p.strike:g}</td>"
             f"<td>{qty_txt}</td>"
-            f"<td>{p.entry_date.isoformat()}</td>"
+            f"<td>{_fmt_date_time(p.entry_date, p.entry_time)}</td>"
             f"<td>{_fmt_money(p.entry_price)}</td>"
             f"<td>{_fmt_money(price)}</td>"
             f"<td class='{cls}'>{pl_txt}</td>"

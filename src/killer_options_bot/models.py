@@ -237,6 +237,12 @@ class PaperPosition:
     mode: str = "paper"
     broker_order_id: str | None = None
     high_water_mark: float | None = None
+    # Wall-clock time (America/New_York, "HH:MM:SS") the position was opened
+    # and closed. Set by the storage layer at the moment of the DB write, not
+    # simulated -- useful for 0DTE trades where the date alone doesn't show
+    # how long a position was actually held.
+    entry_time: str | None = None
+    exit_time: str | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
