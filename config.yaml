@@ -100,6 +100,11 @@ strategies:
     signal: intraday_momentum
     # Fast-moving, same-day expiry: hunt for entries every couple of minutes.
     scan_interval_minutes: 2
+    # Shared with "reversal_0dte": both are same-day/0DTE cadence, so the bot
+    # must never have one open a PUT while the other holds a CALL (or vice
+    # versa) on the same underlying at once -- observed live (QQQ CALL from
+    # 0DTE Reversal + QQQ PUT from 0DTE Momentum opened in the same minute).
+    conflict_group: zerodte_intraday
     contract_filters:
       min_dte: 0
       max_dte: 1
@@ -138,6 +143,10 @@ strategies:
     # BEYOND the band (> rsi_max = overbought → PUT; < rsi_min = oversold → CALL).
     signal: intraday_reversal
     scan_interval_minutes: 2
+    # See "zerodte" above: shares a conflict_group so the two 0DTE-cadence
+    # strategies never fight each other with opposite-side positions on the
+    # same underlying.
+    conflict_group: zerodte_intraday
     contract_filters:
       min_dte: 0
       max_dte: 1
