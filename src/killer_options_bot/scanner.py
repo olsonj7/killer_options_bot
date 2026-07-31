@@ -212,6 +212,11 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     - RSI oversold (< rsi_min) + price extended below SMA → buy CALL
       (bounce candidate)
 
+    Requires the RSI to already be turning back off the extreme (vs. the
+    prior bar) before entering -- without this, live trades kept firing while
+    price was still extending, so the stop hit within minutes/hours instead
+    of the reversion ever playing out.
+
     Useful during consolidation days when momentum strategies chop and
     intraday extremes consistently snap back to VWAP / SMA.
     """
@@ -219,7 +224,8 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     bars = quote.intraday
     ma = sma(bars, s.intraday_sma_period)
     r = rsi(bars, s.intraday_rsi_period)
-    if ma is None or r is None:
+    r_prev = rsi(bars[:-1], s.intraday_rsi_period)
+    if ma is None or r is None or r_prev is None:
         return Signal(
             None, f"Insufficient intraday history ({len(bars)} bars)"
         )
@@ -227,16 +233,30 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     upper = ma * (1 + s.trend_buffer_pct)
     lower = ma * (1 - s.trend_buffer_pct)
     if price > upper and r > s.rsi_max:
+        if r >= r_prev:
+            return Signal(
+                None,
+                f"Bearish fade rejected: RSI {r:.1f} still rising from "
+                f"{r_prev:.1f} (extreme not turning yet)",
+            )
         return Signal(
             Side.PUT,
             f"Reversal fade bearish: {price:.2f} > SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f}",
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f} "
+            f"turning down from {r_prev:.1f}",
         )
     if price < lower and r < s.rsi_min:
+        if r <= r_prev:
+            return Signal(
+                None,
+                f"Bullish bounce rejected: RSI {r:.1f} still falling from "
+                f"{r_prev:.1f} (extreme not turning yet)",
+            )
         return Signal(
             Side.CALL,
             f"Reversal bounce bullish: {price:.2f} < SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f}",
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f} "
+            f"turning up from {r_prev:.1f}",
         )
     return Signal(
         None,
@@ -261,26 +281,46 @@ def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
 
     Deliberately has no trend/slope gate (unlike ``momentum_signal``) since a
     reversion trade is, by definition, betting against the recent direction.
+
+    Requires the RSI to already be turning back off the extreme (vs. the
+    prior daily close) before entering -- without this, live trades kept
+    buying into a still-falling/still-rising move and stopped out before any
+    reversion had a chance to play out.
     """
     s = cfg.signal
     ma = sma(quote.closes, s.sma_period)
     r = rsi(quote.closes, s.rsi_period)
-    if ma is None or r is None:
+    r_prev = rsi(quote.closes[:-1], s.rsi_period)
+    if ma is None or r is None or r_prev is None:
         return Signal(None, "Insufficient history for signal")
 
     upper = ma * (1 + s.trend_buffer_pct)
     lower = ma * (1 - s.trend_buffer_pct)
     if quote.last > upper and r > s.rsi_max:
+        if r >= r_prev:
+            return Signal(
+                None,
+                f"Bearish fade rejected: RSI {r:.1f} still rising from "
+                f"{r_prev:.1f} (extreme not turning yet)",
+            )
         return Signal(
             Side.PUT,
             f"Reversal fade bearish: last {quote.last:.2f} > SMA{s.sma_period} "
-            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f}",
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f} "
+            f"turning down from {r_prev:.1f}",
         )
     if quote.last < lower and r < s.rsi_min:
+        if r <= r_prev:
+            return Signal(
+                None,
+                f"Bullish bounce rejected: RSI {r:.1f} still falling from "
+                f"{r_prev:.1f} (extreme not turning yet)",
+            )
         return Signal(
             Side.CALL,
             f"Reversal bounce bullish: last {quote.last:.2f} < SMA{s.sma_period} "
-            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f}",
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f} "
+            f"turning up from {r_prev:.1f}",
         )
     return Signal(
         None,
