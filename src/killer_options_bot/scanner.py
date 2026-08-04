@@ -60,18 +60,26 @@ def _weekly_trend(daily_closes: list[float], bar_days: int, period: int) -> str 
 def _near_level(
     closes: list[float], lookback: int, price: float, buffer_pct: float
 ) -> str | None:
-    """Flag when ``price`` sits within ``buffer_pct`` of a recent swing level.
+    """Flag when ``price`` is TESTING a prior swing level, not through it.
 
-    Uses the min/max close over the last ``lookback`` daily bars as a simple
-    support/resistance proxy. Returns "support", "resistance", or None.
+    Uses the min/max close over the ``lookback`` daily bars BEFORE today (the
+    current bar is excluded from the level itself) as a simple support/
+    resistance proxy, and only flags a level when price sits within
+    ``buffer_pct`` of it on either side. Without excluding today, a fresh
+    breakout day's own close IS the lookback max/min, so it always compared
+    as "at resistance/support" against itself and blocked every momentum
+    trade on the exact days it should fire; a price that has already cleared
+    the level by more than the buffer is a breakout, not a rejection zone,
+    and returns None (allowed).
     """
-    if lookback <= 0 or len(closes) < lookback:
+    history = closes[:-1]
+    if lookback <= 0 or len(history) < lookback:
         return None
-    window = closes[-lookback:]
+    window = history[-lookback:]
     lo, hi = min(window), max(window)
-    if lo > 0 and price <= lo * (1 + buffer_pct):
+    if lo > 0 and lo * (1 - buffer_pct) <= price <= lo * (1 + buffer_pct):
         return "support"
-    if hi > 0 and price >= hi * (1 - buffer_pct):
+    if hi > 0 and hi * (1 - buffer_pct) <= price <= hi * (1 + buffer_pct):
         return "resistance"
     return None
 
