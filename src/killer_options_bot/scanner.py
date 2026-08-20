@@ -84,6 +84,27 @@ def _near_level(
     return None
 
 
+def _recent_reversal(closes: list[float], streak: int) -> str | None:
+    """Detect a fresh short-term reversal the smoothed RSI/SMA gates miss.
+
+    Wilder's RSI and a 20-day SMA both lag: after a strong multi-day rally,
+    a handful of down days barely dents either one, so ``momentum_signal``
+    can still read "healthy uptrend" days into an actual rollover. This looks
+    at the raw last ``streak`` + 1 closes and flags "down" when each of the
+    last ``streak`` bars closed lower than the one before (a fresh pullback
+    streak, regardless of what RSI/SMA say), or "up" for the mirror bounce
+    case. ``streak`` <= 0 disables the check (always None).
+    """
+    if streak <= 0 or len(closes) < streak + 1:
+        return None
+    window = closes[-(streak + 1):]
+    if all(window[i] < window[i - 1] for i in range(1, len(window))):
+        return "down"
+    if all(window[i] > window[i - 1] for i in range(1, len(window))):
+        return "up"
+    return None
+
+
 def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     """Very simple momentum gate.
 
@@ -105,6 +126,10 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     - ``sr_lookback`` / ``sr_buffer_pct``: refuse a PUT sitting at recent
       support or a CALL sitting at recent resistance, where a bounce/rejection
       is the more likely next move.
+    - ``reversal_streak_days``: refuse a CALL/PUT when the raw closes show a
+      fresh multi-day reversal streak against the trade, even if the smoothed
+      RSI/SMA gates above still read bullish/bearish (they lag a rollover for
+      several days after a strong prior run).
     """
     s = cfg.signal
     ma = sma(quote.closes, s.sma_period)
@@ -129,6 +154,12 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
             return Signal(
                 None, f"Bullish setup rejected: price {quote.last:.2f} at resistance"
             )
+        if _recent_reversal(quote.closes, s.reversal_streak_days) == "down":
+            return Signal(
+                None,
+                f"Bullish setup rejected: {s.reversal_streak_days} straight "
+                f"down days (fresh pullback)",
+            )
         return Signal(
             Side.CALL,
             f"Bullish: last {quote.last:.2f} > SMA{s.sma_period} {ma:.2f} "
@@ -149,6 +180,12 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         if _near_level(quote.closes, s.sr_lookback, quote.last, s.sr_buffer_pct) == "support":
             return Signal(
                 None, f"Bearish setup rejected: price {quote.last:.2f} at support"
+            )
+        if _recent_reversal(quote.closes, s.reversal_streak_days) == "up":
+            return Signal(
+                None,
+                f"Bearish setup rejected: {s.reversal_streak_days} straight "
+                f"up days (fresh bounce)",
             )
         return Signal(
             Side.PUT,

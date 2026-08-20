@@ -72,6 +72,14 @@ class SignalConfig:
     # highest close (likely resistance / rejection zone). 0 disables (default).
     sr_lookback: int = 0
     sr_buffer_pct: float = 0.01
+    # Short-term reversal guard. If > 0, refuse a CALL when the last this-many
+    # daily closes have each been LOWER than the one before (a fresh pullback
+    # streak), and refuse a PUT on the mirror (a fresh bounce streak) -- even
+    # if the smoothed RSI/SMA gates still read bullish/bearish. RSI(14) and a
+    # slow 20-day SMA both lag a sharp multi-day rally, so a few days into a
+    # rollover the daily signal can still look "healthy" from a big prior run
+    # while price is already reversing. 0 disables (default).
+    reversal_streak_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -533,6 +541,7 @@ def load_config(
         weekly_sma_period=int(signal.get("weekly_sma_period", 8)),
         sr_lookback=int(signal.get("sr_lookback", 0)),
         sr_buffer_pct=float(signal.get("sr_buffer_pct", 0.01)),
+        reversal_streak_days=int(signal.get("reversal_streak_days", 0)),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(

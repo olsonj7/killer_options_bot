@@ -11,7 +11,7 @@ from conftest import make_config
 
 from killer_options_bot.config import SignalConfig
 from killer_options_bot.models import Quote, Side
-from killer_options_bot.scanner import _sma_slope_ok, momentum_signal
+from killer_options_bot.scanner import _recent_reversal, _sma_slope_ok, momentum_signal
 
 
 def _cfg(tmp_path, **signal_overrides):
@@ -192,3 +192,59 @@ def test_resistance_blocks_countertrend_call(tmp_path):
     signal = momentum_signal(quote, cfg)
     assert signal.side is None
     assert "resistance" in signal.note.lower()
+
+
+# --- short-term reversal guard ----------------------------------------------
+#
+# Regression coverage for a live SPY trade: RSI(14) and the 20-day SMA slope
+# both still read bullish 3 days into a rollover from a peak, because both are
+# smoothed over a much stronger prior rally. The raw last few closes already
+# showed a fresh down streak that neither gate caught.
+
+
+def test_recent_reversal_detects_down_streak():
+    assert _recent_reversal([100, 105, 110, 108, 106, 104], streak=3) == "down"
+
+
+def test_recent_reversal_detects_up_streak():
+    assert _recent_reversal([110, 105, 100, 102, 104, 106], streak=3) == "up"
+
+
+def test_recent_reversal_none_when_mixed():
+    assert _recent_reversal([100, 105, 110, 108, 111, 109], streak=3) is None
+
+
+def test_recent_reversal_disabled_when_zero():
+    assert _recent_reversal([100, 105, 110, 108, 106, 104], streak=0) is None
+
+
+def test_reversal_streak_blocks_call_after_pullback(tmp_path):
+    # Real SPY daily closes: a strong multi-day rally into a peak, then 3
+    # straight down days. SMA(20) is still well below price (bullish) because
+    # it's dominated by the earlier rally -- the streak guard should refuse
+    # the CALL anyway since the raw closes show a fresh pullback.
+    closes = [
+        754.81, 750.72, 743.29, 742.09, 748.28, 747.41, 738.18, 738.93,
+        739.09, 740.86, 729.46, 741.69, 747.03, 757.67, 771.33, 769.79,
+        768.56, 773.26, 773.03, 770.56, 772.49, 777.88, 776.34, 772.67,
+        768.07,
+    ]
+    cfg = _cfg(tmp_path, sma_period=20, rsi_period=14, reversal_streak_days=3)
+    quote = Quote(symbol="SPY", last=closes[-1], closes=closes)
+    signal = momentum_signal(quote, cfg)
+    assert signal.side is None
+    assert "down days" in signal.note.lower() or "pullback" in signal.note.lower()
+
+
+def test_reversal_streak_allows_call_without_pullback(tmp_path):
+    # Same closes with the guard disabled (0) -- CALL fires normally.
+    closes = [
+        754.81, 750.72, 743.29, 742.09, 748.28, 747.41, 738.18, 738.93,
+        739.09, 740.86, 729.46, 741.69, 747.03, 757.67, 771.33, 769.79,
+        768.56, 773.26, 773.03, 770.56, 772.49, 777.88, 776.34, 772.67,
+        768.07,
+    ]
+    cfg = _cfg(tmp_path, sma_period=20, rsi_period=14, reversal_streak_days=0)
+    quote = Quote(symbol="SPY", last=closes[-1], closes=closes)
+    assert momentum_signal(quote, cfg).side is Side.CALL
+

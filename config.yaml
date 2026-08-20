@@ -363,6 +363,14 @@ signal:
   # resistance / rejection zone). 0 disables; set > 0 to arm.
   sr_lookback: 20
   sr_buffer_pct: 0.01
+  # Short-term reversal guard: refuse a CALL when the raw daily closes have
+  # fallen for this many straight bars (a fresh pullback), and refuse a PUT on
+  # the mirror (a fresh bounce), even if RSI/SMA above still read bullish/
+  # bearish. Added after a live SPY CALL fired 3 days into a rollover from a
+  # peak -- RSI(14)=57 and the 20-day SMA slope were both still "healthy"
+  # because they're smoothed over a much stronger prior rally, so neither gate
+  # saw the fresh reversal the raw closes already showed. 0 disables.
+  reversal_streak_days: 3
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.
