@@ -107,3 +107,43 @@ def test_open_and_close_position_stamp_entry_exit_time(tmp_path):
     assert closed.exit_time is not None
     assert len(closed.exit_time) == 8
 
+
+def test_archive_and_clear_preserves_realized_pl(tmp_path):
+    """Resetting the ledger must not lose real P/L history (2026-08-27)."""
+    config = make_config(tmp_path)
+    storage = SQLiteStorage(config.db_path)
+    as_of = date(2026, 1, 1)
+    pos = _position(as_of, 1.00, 1.50)  # +$50 winner
+    storage.open_position(pos)
+    storage.close_position(pos.id, 1.50, as_of, "profit target")
+
+    archived_count = storage.archive_and_clear_positions(reason="test fix")
+
+    assert archived_count == 1
+    assert storage.all_positions() == []
+    assert storage.closed_positions() == []
+
+    [archived] = storage.archived_positions()
+    assert archived.realized_pl() == 50.0
+    assert archived.exit_reason == "profit target"
+
+
+def test_archive_accumulates_across_multiple_resets(tmp_path):
+    config = make_config(tmp_path)
+    storage = SQLiteStorage(config.db_path)
+    as_of = date(2026, 1, 1)
+
+    pos1 = _position(as_of, 1.00, 1.50)  # +$50
+    storage.open_position(pos1)
+    storage.close_position(pos1.id, 1.50, as_of, "profit target")
+    storage.archive_and_clear_positions(reason="first fix")
+
+    pos2 = _position(as_of, 1.00, 0.50)  # -$50
+    storage.open_position(pos2)
+    storage.close_position(pos2.id, 0.50, as_of, "stop loss")
+    storage.archive_and_clear_positions(reason="second fix")
+
+    archived = storage.archived_positions()
+    assert len(archived) == 2
+    assert sum(p.realized_pl() or 0.0 for p in archived) == 0.0
+

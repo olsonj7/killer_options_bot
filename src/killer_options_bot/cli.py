@@ -290,6 +290,28 @@ def cmd_pnl(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reset_ledger(args: argparse.Namespace) -> int:
+    """Archive all positions (preserving cumulative P/L), then wipe
+    positions/candidates so forward-test data starts clean after a fix."""
+    config = load_config(args.config)
+    storage = get_storage(config)
+
+    archived = storage.archived_positions()
+    prior_realized = sum(p.realized_pl() or 0.0 for p in archived)
+
+    n = storage.archive_and_clear_positions(reason=args.reason)
+
+    all_archived = storage.archived_positions()
+    total_realized = sum(p.realized_pl() or 0.0 for p in all_archived)
+    this_reset = total_realized - prior_realized
+
+    print(f"Archived {n} position(s){f' ({args.reason})' if args.reason else ''}.")
+    print(f"This reset's realized P/L: ${this_reset:+.2f}")
+    print(f"Cumulative archived P/L (all resets): ${total_realized:+.2f}")
+    print("positions and candidates wiped: open=0 closed=0 candidates=0")
+    return 0
+
+
 def cmd_withdraw(args: argparse.Namespace) -> int:
     from killer_options_bot.withdraw import advise_from_storage
 
@@ -1024,6 +1046,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_pnl.add_argument("--source", choices=["mock", "tradier"], default="mock")
     p_pnl.add_argument("--as-of", help="Simulate on a date (YYYY-MM-DD)")
     p_pnl.set_defaults(func=cmd_pnl)
+
+    p_reset = sub.add_parser(
+        "reset-ledger",
+        help="Archive all positions (preserving cumulative P/L), then wipe "
+        "positions/candidates for a clean forward-test start",
+    )
+    p_reset.add_argument(
+        "--reason", help="Short note on why this reset happened (e.g. a fix)"
+    )
+    p_reset.set_defaults(func=cmd_reset_ledger)
 
     p_wd = sub.add_parser(
         "withdraw",

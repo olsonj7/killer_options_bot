@@ -111,6 +111,34 @@ CREATE TABLE IF NOT EXISTS runtime_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS positions_archive (
+    id {d.autoincrement},
+    position_id INTEGER NOT NULL,
+    option_symbol TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    side TEXT NOT NULL,
+    strike {d.real} NOT NULL,
+    expiration TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    entry_price {d.real} NOT NULL,
+    entry_date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'paper',
+    strategy TEXT NOT NULL DEFAULT 'default',
+    original_quantity INTEGER,
+    realized_pl_banked {d.real} NOT NULL DEFAULT 0,
+    trims_done INTEGER NOT NULL DEFAULT 0,
+    high_water_mark {d.real},
+    broker_order_id TEXT,
+    entry_time TEXT,
+    exit_time TEXT,
+    exit_price {d.real},
+    exit_date TEXT,
+    exit_reason TEXT,
+    archived_at TEXT NOT NULL,
+    archive_reason TEXT
+);
 """
 
 
@@ -644,6 +672,54 @@ class BaseStorage:
         rows = self._query_all(
             "SELECT * FROM positions WHERE status = ? ORDER BY id",
             (PositionStatus.CLOSED.value,),
+        )
+        return [self._row_to_position(r) for r in rows]
+
+    # --- Archive (used before wiping positions/candidates) -----------------
+    # The pre-2026-08-27 reset workflow (DELETE FROM positions/candidates
+    # after a signal/behavior fix, to keep forward-test data honest)
+    # permanently destroyed real P/L history along with the tainted rows.
+    # archive_and_clear_positions() copies everything to positions_archive
+    # first so cumulative account performance survives every reset.
+
+    _ARCHIVE_COLUMNS = (
+        "option_symbol, underlying, side, strike, expiration, quantity, "
+        "entry_price, entry_date, status, mode, strategy, original_quantity, "
+        "realized_pl_banked, trims_done, high_water_mark, broker_order_id, "
+        "entry_time, exit_time, exit_price, exit_date, exit_reason"
+    )
+
+    def archive_and_clear_positions(self, reason: str | None = None) -> int:
+        """Copy all positions into positions_archive, then wipe positions and
+        candidates. Returns the number of rows archived."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            row = conn.execute(
+                self._translate("SELECT COUNT(*) AS n FROM positions")
+            ).fetchone()
+            archived = int(dict(row)["n"]) if row else 0
+            conn.execute(
+                self._translate(
+                    "INSERT INTO positions_archive "
+                    f"(position_id, {self._ARCHIVE_COLUMNS}, archived_at, archive_reason) "
+                    f"SELECT id, {self._ARCHIVE_COLUMNS}, ?, ? FROM positions"
+                ),
+                (now, reason or ""),
+            )
+            conn.execute(self._translate("DELETE FROM positions"))
+            conn.execute(self._translate("DELETE FROM candidates"))
+        return archived
+
+    def archived_positions(self) -> list[PaperPosition]:
+        """All positions ever archived by archive_and_clear_positions(), across
+        every reset, for a true cumulative P/L view."""
+        rows = self._query_all(
+            "SELECT position_id AS id, option_symbol, underlying, side, strike, "
+            "expiration, quantity, entry_price, entry_date, status, mode, "
+            "strategy, original_quantity, realized_pl_banked, trims_done, "
+            "high_water_mark, broker_order_id, entry_time, exit_time, "
+            "exit_price, exit_date, exit_reason FROM positions_archive "
+            "ORDER BY id"
         )
         return [self._row_to_position(r) for r in rows]
 
