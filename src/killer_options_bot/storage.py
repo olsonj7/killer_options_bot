@@ -259,6 +259,28 @@ class BaseStorage:
             (key, value, now),
         )
 
+    def set_state_many(self, pairs: list[tuple[str, str]]) -> None:
+        """Upsert many runtime_state rows over a single DB connection.
+
+        Each ``set_state`` call opens its own connection; the dashboard's
+        config-save form can touch dozens of fields at once, and doing that
+        one connection per field made saves take up to a minute over a
+        network DB (Supabase). Batching them into one connection turns that
+        into a single round trip.
+        """
+        if not pairs:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        sql = self._translate(
+            "INSERT INTO runtime_state (key, value, updated_at) "
+            "VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "updated_at=excluded.updated_at"
+        )
+        with self._connect() as conn:
+            for key, value in pairs:
+                conn.execute(sql, (key, value, now))
+
     def get_state(self, key: str, default: str | None = None) -> str | None:
         row = self._query_one(
             "SELECT value FROM runtime_state WHERE key = ?", (key,)
@@ -304,21 +326,8 @@ class BaseStorage:
         self.set_state(f"{self._CONFIG_NS}{section}.{key}", str(value))
 
     def get_config_overrides(self) -> dict[tuple[str, str], str]:
-        """Return all base config overrides as {(section, key): str_value}.
-
-        Reads all runtime_state rows and filters in Python (avoids LIKE with
-        ``%`` which some Postgres drivers treat as a placeholder character).
-        """
-        rows = self._query_all("SELECT key, value FROM runtime_state", ())
-        result: dict[tuple[str, str], str] = {}
-        for row in rows:
-            k: str = row["key"]
-            if k.startswith(self._CONFIG_NS) and ":strategy:" not in k:
-                field = k[len(self._CONFIG_NS):]
-                parts = field.split(".", 1)
-                if len(parts) == 2:
-                    result[(parts[0], parts[1])] = row["value"]
-        return result
+        """Return all base config overrides as {(section, key): str_value}."""
+        return self.get_all_config_overrides()[0]
 
     def set_strategy_config_override(
         self, strategy: str, section: str, key: str, value: float | int
@@ -330,18 +339,50 @@ class BaseStorage:
 
     def get_strategy_config_overrides(self) -> dict[tuple[str, str, str], str]:
         """Return strategy-scoped overrides as {(strategy, section, key): str_value}."""
+        return self.get_all_config_overrides()[1]
+
+    def get_all_config_overrides(
+        self,
+    ) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str, str], str]]:
+        """Fetch base + per-strategy config overrides with a single query.
+
+        Replaces separately calling ``get_config_overrides`` and
+        ``get_strategy_config_overrides`` (each its own DB connection) with
+        one round trip over the same ``runtime_state`` rows.
+        """
         rows = self._query_all("SELECT key, value FROM runtime_state", ())
-        result: dict[tuple[str, str, str], str] = {}
-        prefix = f"{self._CONFIG_NS}strategy:"
+        base: dict[tuple[str, str], str] = {}
+        strat: dict[tuple[str, str, str], str] = {}
+        strat_prefix = f"{self._CONFIG_NS}strategy:"
         for row in rows:
             k: str = row["key"]
-            if k.startswith(prefix):
-                rest = k[len(prefix):]
-                # format: "zerodte.contract_filters.min_delta"
+            if k.startswith(strat_prefix):
+                rest = k[len(strat_prefix):]
                 parts = rest.split(".", 2)
                 if len(parts) == 3:
-                    result[(parts[0], parts[1], parts[2])] = row["value"]
-        return result
+                    strat[(parts[0], parts[1], parts[2])] = row["value"]
+            elif k.startswith(self._CONFIG_NS):
+                field = k[len(self._CONFIG_NS):]
+                parts = field.split(".", 1)
+                if len(parts) == 2:
+                    base[(parts[0], parts[1])] = row["value"]
+        return base, strat
+
+    def set_config_overrides_many(
+        self,
+        base: list[tuple[str, str, float | int]],
+        strategy: list[tuple[str, str, str, float | int]],
+    ) -> None:
+        """Persist many base + per-strategy config edits in one DB connection."""
+        pairs = [
+            (f"{self._CONFIG_NS}{section}.{key}", str(value))
+            for section, key, value in base
+        ]
+        pairs += [
+            (f"{self._CONFIG_NS}strategy:{name}.{section}.{key}", str(value))
+            for name, section, key, value in strategy
+        ]
+        self.set_state_many(pairs)
 
     def trades_today_for_strategy(self, strategy: str, as_of: "date") -> int:
         """Count positions opened today by the given strategy (open + closed)."""

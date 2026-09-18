@@ -121,12 +121,20 @@ class Dashboard:
     def __init__(self, config_path: str, source: str):
         self.config_path = config_path
         self.source = source
+        self._storage: BaseStorage | None = None
+
+    def _get_storage(self, base_config: Config) -> BaseStorage:
+        # Reused across requests: constructing a storage backend re-runs
+        # schema init/migration checks, each its own DB connection, which
+        # added up fast when done on every single page load.
+        if self._storage is None:
+            self._storage = get_storage(base_config)
+        return self._storage
 
     def _context(self):
         base_config = load_config(self.config_path)
-        storage = get_storage(base_config)
-        overrides = storage.get_config_overrides()
-        strat_overrides = storage.get_strategy_config_overrides()
+        storage = self._get_storage(base_config)
+        overrides, strat_overrides = storage.get_all_config_overrides()
         config = load_config(self.config_path, overrides or None, strat_overrides or None)
         data = _build_data_source(self.source, config)
         engine = PaperEngine(config, data, storage, cost_model=config.cost_model())
@@ -184,8 +192,8 @@ class Dashboard:
         and take effect on the next dashboard render without any code push.
         """
         base_config = load_config(self.config_path)
-        storage = get_storage(base_config)
-        existing = storage.get_config_overrides()
+        storage = self._get_storage(base_config)
+        existing, existing_strat = storage.get_all_config_overrides()
 
         # Build effective raw dict: YAML + existing DB overrides + new form values
         raw = self._load_raw_config()
@@ -219,7 +227,6 @@ class Dashboard:
             to_save.append((section, key, value))
 
         # Per-strategy fields: form key = "strategy.<name>.<section>.<key>"
-        existing_strat = storage.get_strategy_config_overrides()
         non_default = [s for s in base_config.active_strategies if s.name != "default"]
         for strat in non_default:
             for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
@@ -285,10 +292,10 @@ class Dashboard:
         except Exception as exc:
             return f"Config rejected (validation failed): {exc}"
 
-        for section, key, value in to_save:
-            storage.set_config_override(section, key, value)
-        for strat_name, section, key, value in strat_to_save:
-            storage.set_strategy_config_override(strat_name, section, key, value)
+        # One batched connection instead of one per field -- with several
+        # strategies each having a dozen fields this used to mean 50-100+
+        # separate DB connections and made saving take up to a minute.
+        storage.set_config_overrides_many(to_save, strat_to_save)
 
         total = len(to_save) + len(strat_to_save)
         return f"Config saved: {total} field(s) updated."
@@ -350,9 +357,9 @@ class Dashboard:
 
     # --- Rendering ---------------------------------------------------------
 
-    def render(self, flash: str = "") -> str:
+    def render(self, flash: str = "", range_key: str = "all") -> str:
         config, storage, _data, engine = self._context()
-        return _render_page(config, storage, engine, self.source, flash)
+        return _render_page(config, storage, engine, self.source, flash, range_key)
 
 
 def _fmt_money(value: float) -> str:
@@ -378,14 +385,53 @@ def _fmt_scan_time(raw: str | None) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(EASTERN).strftime("%m-%d %H:%M ET")
 
+_RANGE_OPTIONS: list[tuple[str, str]] = [
+    ("30", "30D"),
+    ("90", "90D"),
+    ("365", "1Y"),
+    ("all", "All"),
+]
+
+
+def _trades_in_range(
+    closed: list[PaperPosition], range_key: str
+) -> list[PaperPosition]:
+    """Filter closed positions to those exiting within ``range_key`` days.
+
+    ``range_key`` is one of ``_RANGE_OPTIONS``' keys ("30", "90", "365", or
+    "all"). Comparison is done on the "YYYY-MM-DD" exit_date string directly
+    (lexicographic order matches chronological order for that format).
+    """
+    if range_key == "all" or range_key not in {k for k, _ in _RANGE_OPTIONS}:
+        return closed
+    from datetime import timedelta
+
+    from killer_options_bot.market import EASTERN
+
+    cutoff = (datetime.now(EASTERN) - timedelta(days=int(range_key))).strftime(
+        "%Y-%m-%d"
+    )
+    return [p for p in closed if p.exit_date and str(p.exit_date) >= cutoff]
+
+
+def _render_range_picker(range_key: str) -> str:
+    """Small link toolbar to switch the equity curve's date range via ?range=."""
+    links = []
+    for key, label in _RANGE_OPTIONS:
+        cls = "range-active" if key == range_key else "range-link"
+        links.append(f"<a class='{cls}' href='/?range={key}'>{label}</a>")
+    return f"<div class='range-picker'>{' '.join(links)}</div>"
+
+
 def _equity_curve_svg(
     closed: list[PaperPosition], unrealized: float | None = None
 ) -> str:
     """Render the cumulative realized-P/L curve as an inline SVG.
 
-    Points are ordered by exit date. When ``unrealized`` is provided (the
-    current mark-to-market P/L of open positions), a dashed projected segment
-    is appended so the curve reflects live open exposure. Returns a small
+    Points are ordered by exit date, with x-axis tick labels showing a few
+    of those dates. When ``unrealized`` is provided (the current
+    mark-to-market P/L of open positions), a dashed projected segment is
+    appended so the curve reflects live open exposure. Returns a small
     placeholder message when there is not yet enough data to draw a line.
     """
     trades = sorted(
@@ -395,15 +441,18 @@ def _equity_curve_svg(
 
     equity = 0.0
     points = [0.0]
+    dates: list[str | None] = [None]
     for p in trades:
         equity += p.realized_pl() or 0.0
         points.append(round(equity, 2))
+        dates.append(p.exit_date)
 
     has_projection = unrealized is not None and abs(unrealized) > 1e-9
     proj_index: int | None = None
     if has_projection:
         proj_index = len(points)
         points.append(round(equity + unrealized, 2))
+        dates.append(None)  # projected point has no fixed date yet
 
     if len(points) < 2:
         return (
@@ -459,6 +508,28 @@ def _equity_curve_svg(
             f"<circle cx='{px2:.1f}' cy='{py2:.1f}' r='3' fill='{proj_color}'/>"
         )
 
+    # A handful of x-axis tick labels (exit dates), spread across the solid
+    # (realized) portion of the curve so the chart reads like a timeline.
+    axis_svg = ""
+    real_indices = [i for i in range(1, solid_end) if dates[i]]
+    if real_indices:
+        tick_count = min(5, len(real_indices))
+        if tick_count > 1:
+            chosen = sorted({
+                real_indices[round(k * (len(real_indices) - 1) / (tick_count - 1))]
+                for k in range(tick_count)
+            })
+        else:
+            chosen = [real_indices[0]]
+        ticks = []
+        for i in chosen:
+            label_txt = str(dates[i] or "")[5:]  # "YYYY-MM-DD" -> "MM-DD"
+            ticks.append(
+                f"<text x='{x(i):.1f}' y='{h - 8}' fill='#8b949e' "
+                f"font-size='10' text-anchor='middle'>{label_txt}</text>"
+            )
+        axis_svg = "".join(ticks)
+
     label = "realized"
     if proj_index is not None:
         label = "realized + open marks (dashed)"
@@ -470,6 +541,7 @@ def _equity_curve_svg(
   <polyline points="{solid_coords}" fill="none" stroke="{line_color}"
     stroke-width="2" stroke-linejoin="round"/>
   {proj_svg}
+  {axis_svg}
     <text x="{pad_x}" y="18" fill="#8b949e" font-size="11">
     {label}: {_fmt_money(hi)} peak / {_fmt_money(lo)} trough</text>
     <text x="{w - pad_x}" y="18" fill="{line_color}" font-size="11"
@@ -885,6 +957,7 @@ def _render_page(
     engine: PaperEngine,
     source: str,
     flash: str,
+    range_key: str = "all",
 ) -> str:
     open_positions = storage.open_positions()
     closed = storage.closed_positions()
@@ -990,7 +1063,8 @@ def _render_page(
         or "<tr><td colspan='9' class='muted'>No candidates logged yet.</td></tr>"
     )
     max_risk = config.account_value * config.risk.max_trade_risk_pct
-    equity_svg = _equity_curve_svg(closed, unrealized=unrealized)
+    equity_svg = _equity_curve_svg(_trades_in_range(closed, range_key), unrealized=unrealized)
+    range_picker_html = _render_range_picker(range_key)
 
     withdraw_html = _render_withdraw_section(config, storage, unrealized)
     stats_html = _render_stats_section(closed)
@@ -1057,6 +1131,12 @@ def _render_page(
   .warn {{ color: #d29922; font-size: 12px; margin-top: 8px; }}
   .chart {{ background: #161b22; border: 1px solid #30363d;
             border-radius: 8px; margin-bottom: 28px; }}
+  .range-picker {{ display: flex; gap: 10px; margin-bottom: 8px; }}
+  .range-link, .range-active {{ font-size: 12px; text-decoration: none;
+    padding: 3px 10px; border-radius: 12px; border: 1px solid #30363d; }}
+  .range-link {{ color: #8b949e; }}
+  .range-link:hover {{ color: #c9d1d9; border-color: #58a6ff; }}
+  .range-active {{ color: #58a6ff; border-color: #58a6ff; background: #1f6feb22; }}
   .wd-box {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
              padding: 12px 18px; margin-bottom: 28px; }}
   .wd-list {{ margin: 0; padding-left: 18px; }}
@@ -1148,6 +1228,7 @@ def _render_page(
   </div>
 
   <h2 style="font-size:15px;">Equity curve (realized solid, open marks dashed)</h2>
+  {range_picker_html}
   <div class="chart">{equity_svg}</div>
 
   {stats_html}
@@ -1482,7 +1563,9 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
                 return
             path = self.path.split("?", 1)[0]
             if path == "/":
-                self._send_html(dashboard.render(_pop_flash()))
+                query = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                range_key = (query.get("range") or ["all"])[0]
+                self._send_html(dashboard.render(_pop_flash(), range_key))
                 return
             if path == "/config":
                 self._send_html(dashboard.render_config(_pop_flash()))
