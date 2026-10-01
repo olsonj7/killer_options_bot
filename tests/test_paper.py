@@ -511,6 +511,35 @@ def test_same_day_position_closes_if_carried_overnight(tmp_path):
     assert "max holding days" in engine.exit_reason(pos, 1.95)
 
 
+def test_eod_forces_same_day_strategy_flat(tmp_path):
+    # Regression (live incident 9/16): a "same-day" 1-DTE position survived to
+    # the close and gapped -93% overnight. With eod=True, max_holding_days=0
+    # positions must be closed on the entry day even if no other rule fires.
+    config = _zerodte_config(tmp_path)
+    entry = date(2026, 1, 2)
+    pos = PaperPosition(
+        option_symbol="X", underlying="SPY", side=Side.PUT, strike=752.5,
+        expiration=entry + timedelta(days=1), quantity=1, entry_price=2.00,
+        entry_date=entry,
+    )
+    engine = PaperEngine(config, MockMarketData(as_of=entry),
+                         Storage(config.db_path), as_of=entry)
+    # During the session nothing triggers on a small move...
+    assert engine.exit_reason(pos, 1.90) is None
+    # ...but in the end-of-session window the same move must force-close.
+    assert "end of session" in engine.exit_reason(pos, 1.90, eod=True)
+
+
+def test_eod_does_not_touch_multiday_strategies(tmp_path):
+    # eod must only force same-day (max_holding_days=0) strategies flat.
+    config = make_config(tmp_path)  # base exits: multi-day hold allowed
+    as_of = date(2026, 1, 1)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of),
+                         Storage(config.db_path), as_of=as_of)
+    pos = _position(as_of, 1.00)
+    assert engine.exit_reason(pos, 1.10, eod=True) is None
+
+
 def test_hold_when_no_rule_triggers(tmp_path):
     config = make_config(tmp_path)
     as_of = date(2026, 1, 1)

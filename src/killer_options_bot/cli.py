@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date
+from datetime import time as dt_time
 
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.brokers.mock import MockMarketData
@@ -830,7 +831,12 @@ def run_loop(
             stamp = datetime.now().strftime("%H:%M:%S")
 
             # 1) Always manage exits first (capital protection).
-            results = engine.manage_all()
+            # In the session's final minutes, force same-day strategies
+            # (max_holding_days=0) flat so they never carry overnight gap risk.
+            from killer_options_bot.market import now_eastern
+
+            eod = now_eastern().time() >= dt_time(15, 50)
+            results = engine.manage_all(eod=eod)
             closed = sum(1 for r in results if r.closed)
             trimmed = sum(1 for r in results if r.trimmed and not r.closed)
             if results:

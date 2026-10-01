@@ -122,10 +122,9 @@ strategies:
       # comes from big winners + banking partial profit early, NOT a high hit
       # rate. Target expectancy/profit-factor > 0, not "win %".
       profit_target_pct: 0.80
-      # Wider stop than the weekly trade: 0DTE gamma/IV cause large intraday
-      # swings, so a tight stop gets whipsawed out of trades that recover. The
-      # trim ladder banks profit early, which offsets the bigger max loss.
-      stop_loss_pct: 0.50
+      # Synced to the DB override (2026-10-01): tighter than the original 0.50
+      # -- the trim ladder banks profit early, which offsets the max loss.
+      stop_loss_pct: 0.33
       max_holding_days: 0
       min_dte_exit: 0
       # Scale-out ladder: bank profit into strength, let a runner ride to the
@@ -139,9 +138,10 @@ strategies:
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
     limits:
+      # Synced to DB overrides (2026-10-01).
+      max_trades_per_day: 3
       # No new 0DTE momentum entries during the low-volume midday chop window.
-      # Toggle in the config UI; off by default so you can enable as needed.
-      skip_midday: false
+      skip_midday: true
   fast_momentum:
     # Same intraday momentum trigger and same-day forced exit as "zerodte",
     # but 2-5 DTE instead of 0-1: less gamma/theta per % of underlying move,
@@ -184,17 +184,20 @@ strategies:
       max_delta: 0.55
       max_spread_pct: 0.18
     exits:
-      # Small target: in consolidation moves are short. Take 25% and get out.
-      profit_target_pct: 0.25
-      # Cut fast on failed reversals — a fade that keeps going is brutal.
-      stop_loss_pct: 0.25
+      # Synced to DB overrides (2026-10-01): production runs a ride-the-winner
+      # posture (0.80 target + two-rung trim ladder), not the original
+      # take-25%-and-leave. The 9/16 +422% QQQ winner closed under these rules.
+      profit_target_pct: 0.80
+      stop_loss_pct: 0.33
       max_holding_days: 0
       min_dte_exit: 0
       trims:
-        - at_pct: 0.15   # +15%: sell half early
+        - at_pct: 0.25   # +25%: sell half early
           fraction: 0.5
+        - at_pct: 0.50   # +50%: sell another quarter
+          fraction: 0.25
     limits:
-      max_trades_per_day: 2
+      max_trades_per_day: 1
       # Reversal is specifically a morning/afternoon-end play.
       # Midday noise is the enemy of fades — skip it.
       skip_midday: true
@@ -223,19 +226,21 @@ strategies:
       max_dte: 10
       min_delta: 0.25
       max_delta: 0.40
-      # Tighter than the base 0.12 -- see "default" above for the reasoning
-      # (narrower spreads reduce mid-price gaps past the stop between ticks).
-      max_spread_pct: 0.08
+      # Synced to DB override (2026-10-01): production runs the base 0.12.
+      max_spread_pct: 0.12
     exits:
-      # Bigger target/stop than 0DTE reversal since this holds days, not
-      # minutes — needs room for the reversion move to actually develop.
-      profit_target_pct: 0.35
+      # Synced to DB overrides (2026-10-01): same ride-the-winner posture as
+      # the other strategies (0.80 target + trim ladder) instead of the
+      # original 0.35 take-profit.
+      profit_target_pct: 0.80
       stop_loss_pct: 0.30
       max_holding_days: 5
       min_dte_exit: 1
       trims:
         - at_pct: 0.20   # +20%: bank half early, let the rest run to target
           fraction: 0.5
+        - at_pct: 0.50   # +50%: sell another quarter
+          fraction: 0.25
   strat:
     # Price-action day trade distilled from TheSTRAT / smart-money course:
     # enter on a directional STRAT "2" bar (breaks the prior bar's high/low)
@@ -404,8 +409,11 @@ signal:
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.
-  # Take profit when the option mid is up this fraction (0.30 = +30%).
-  profit_target_pct: 0.30
+  # NOTE (2026-10-01): synced to the DB overrides set via the /config UI that
+  # production has actually been running with -- the 0.80 target + trim ladder
+  # measurably outperformed the old flat 0.30 target (trimmed trades: +$2,190
+  # across 8; untrimmed: -$812 across 10).
+  profit_target_pct: 0.80
   # Cut the loss when the option mid is down this fraction (0.25 = -25%).
   # Tight stop: high-conviction, small-loss posture for weekly trades.
   stop_loss_pct: 0.25
@@ -413,6 +421,12 @@ exits:
   max_holding_days: 3
   # Also exit if DTE falls to or below this (0 = only force-exit at expiry).
   min_dte_exit: 0
+  # Bank profit into strength while the runner rides to the 0.80 target.
+  trims:
+    - at_pct: 0.30   # +30%: sell half
+      fraction: 0.5
+    - at_pct: 0.50   # +50%: sell another quarter
+      fraction: 0.25
 
 costs:
   # Transaction-cost assumptions for paper fills. Filling at the mid overstates

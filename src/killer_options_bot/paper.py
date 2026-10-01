@@ -186,7 +186,7 @@ class PaperEngine:
     # --- Exit decision -----------------------------------------------------
 
     def exit_reason(
-        self, position: PaperPosition, option_price: float
+        self, position: PaperPosition, option_price: float, eod: bool = False
     ) -> str | None:
         """Return an exit reason if any rule triggers, else None."""
         e = self._exits_for(position)
@@ -210,6 +210,13 @@ class PaperEngine:
 
         if pl_pct <= -e.stop_loss_pct:
             return f"stop loss hit ({pl_pct:.0%})"
+
+        # Same-day strategies (max_holding_days=0) must never carry overnight:
+        # the calendar check below only fires the NEXT morning, which let a
+        # "same-day" 1-DTE position gap -93% overnight (live incident 9/16).
+        # The run loop sets eod=True in the session's final minutes.
+        if eod and e.max_holding_days == 0:
+            return f"end of session, same-day exit ({pl_pct:+.0%})"
 
         # Calendar-based forced exits (time-in-trade and expiration zone) must
         # not fire on the ENTRY day. Otherwise a same-day / 0DTE strategy
@@ -286,7 +293,9 @@ class PaperEngine:
             banked_total += banked_add
         return trimmed_total, round(banked_total, 2)
 
-    def manage_position(self, position: PaperPosition) -> ManageResult:
+    def manage_position(
+        self, position: PaperPosition, eod: bool = False
+    ) -> ManageResult:
         contract = _find_contract(
             self.data,
             position.underlying,
@@ -339,7 +348,7 @@ class PaperEngine:
 
         # Exit rules trigger on the current market mid; the actual fill is at
         # the (worse) cost-adjusted exit price.
-        reason = self.exit_reason(position, contract.mid)
+        reason = self.exit_reason(position, contract.mid, eod=eod)
         if reason is not None:
             fill = self._exit_price(contract)
             self.storage.close_position(position.id, fill, self.as_of, reason)
@@ -352,8 +361,11 @@ class PaperEngine:
             trimmed=trimmed, banked=banked,
         )
 
-    def manage_all(self) -> list[ManageResult]:
-        return [self.manage_position(p) for p in self.storage.open_positions()]
+    def manage_all(self, eod: bool = False) -> list[ManageResult]:
+        return [
+            self.manage_position(p, eod=eod)
+            for p in self.storage.open_positions()
+        ]
 
     # --- Reporting ---------------------------------------------------------
 
