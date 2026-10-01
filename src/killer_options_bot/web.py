@@ -62,6 +62,7 @@ STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "swing": "Swing",
     "leaps": "LEAPS",
     "strat": "STRAT Breakout",
+    "fast_momentum": "Fast Momentum (2-5 DTE)",
 }
 
 

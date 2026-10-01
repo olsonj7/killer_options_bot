@@ -29,7 +29,12 @@ account_tiers:
     # NOT active yet — adding a third entry source works against the current
     # goal of FEWER, higher-quality trades. Enable it once default/zerodte prove
     # out with the new pickiness gates.
-    strategies: [default, zerodte, reversal_0dte, weekly_reversion]
+    # swing/leaps/fast_momentum added 2026-10-01 (still paper-only) to forward-
+    # test longer-DTE, less theta-sensitive variants of the momentum thesis --
+    # live data showed every "default"/zerodte trade resolving in 0-1 day
+    # regardless of DTE, consistent with gamma/theta dominating short-dated
+    # contracts before the multi-day thesis gets room to play out.
+    strategies: [default, zerodte, reversal_0dte, weekly_reversion, swing, leaps, fast_momentum]
     risk:
       max_trade_risk_pct: 0.30
       # Two concurrent slots max on the smallest account. Combined with the
@@ -136,6 +141,31 @@ strategies:
     limits:
       # No new 0DTE momentum entries during the low-volume midday chop window.
       # Toggle in the config UI; off by default so you can enable as needed.
+      skip_midday: false
+  fast_momentum:
+    # Same intraday momentum trigger and same-day forced exit as "zerodte",
+    # but 2-5 DTE instead of 0-1: less gamma/theta per % of underlying move,
+    # so profit_target/stop_loss are scaled down to match the calmer swings.
+    signal: intraday_momentum
+    scan_interval_minutes: 2
+    # Same-day cadence as zerodte/reversal_0dte -- must not fight them with an
+    # opposite-side position on the same underlying.
+    conflict_group: zerodte_intraday
+    contract_filters:
+      min_dte: 2
+      max_dte: 5
+      min_delta: 0.35
+      max_delta: 0.55
+      max_spread_pct: 0.15
+    exits:
+      profit_target_pct: 0.40
+      stop_loss_pct: 0.30
+      max_holding_days: 0
+      min_dte_exit: 1
+      trims:
+        - at_pct: 0.20   # +20%: sell half
+          fraction: 0.5
+    limits:
       skip_midday: false
   reversal_0dte:
     # Same-day mean-reversion fade: RSI overbought/oversold extremes snap back
