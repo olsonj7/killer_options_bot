@@ -41,9 +41,21 @@ class ManageResult:
 
 
 def _find_contract(
-    data: MarketData, underlying: str, side: Side, option_symbol: str
+    data: MarketData,
+    underlying: str,
+    side: Side,
+    option_symbol: str,
+    expiration: date | None = None,
 ) -> OptionContract | None:
-    for contract in data.get_option_chain(underlying, side):
+    # When the expiration is already known (an existing position), fetch just
+    # that date's chain instead of every expiration -- for daily-expiration
+    # underlyings like SPY/QQQ, get_option_chain() means dozens of requests.
+    fetch = getattr(data, "get_option_chain_for_expiration", None)
+    if fetch is not None and expiration is not None:
+        contracts = fetch(underlying, side, expiration)
+    else:
+        contracts = data.get_option_chain(underlying, side)
+    for contract in contracts:
         if contract.symbol == option_symbol:
             return contract
     return None
@@ -276,7 +288,11 @@ class PaperEngine:
 
     def manage_position(self, position: PaperPosition) -> ManageResult:
         contract = _find_contract(
-            self.data, position.underlying, position.side, position.option_symbol
+            self.data,
+            position.underlying,
+            position.side,
+            position.option_symbol,
+            expiration=position.expiration,
         )
         if contract is None or not contract.has_quote:
             # No contract match, or the broker returned a dead quote (bid=
@@ -343,7 +359,11 @@ class PaperEngine:
 
     def mark_to_market(self, position: PaperPosition) -> float | None:
         contract = _find_contract(
-            self.data, position.underlying, position.side, position.option_symbol
+            self.data,
+            position.underlying,
+            position.side,
+            position.option_symbol,
+            expiration=position.expiration,
         )
         if contract is None or not contract.has_quote:
             return None
@@ -352,7 +372,11 @@ class PaperEngine:
     def exit_fill_price(self, position: PaperPosition) -> float | None:
         """Cost-aware price to close a position now (for forced closes)."""
         contract = _find_contract(
-            self.data, position.underlying, position.side, position.option_symbol
+            self.data,
+            position.underlying,
+            position.side,
+            position.option_symbol,
+            expiration=position.expiration,
         )
         if contract is None or not contract.has_quote:
             return None

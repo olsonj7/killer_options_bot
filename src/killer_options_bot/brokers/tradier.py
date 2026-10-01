@@ -245,39 +245,59 @@ class TradierMarketData:
     ) -> list[OptionContract]:
         contracts: list[OptionContract] = []
         for expiration in self._expirations(symbol):
-            data = self._get(
-                "/markets/options/chains",
-                {
-                    "symbol": symbol,
-                    "expiration": expiration.isoformat(),
-                    "greeks": "true",
-                },
-            )
-            options = (data.get("options") or {}).get("option") or []
-            if isinstance(options, dict):
-                options = [options]
-            for opt in options:
-                if opt.get("option_type") != side.value:
-                    continue
-                greeks = opt.get("greeks") or {}
-                contracts.append(
-                    OptionContract(
-                        symbol=opt.get("symbol", ""),
-                        underlying=symbol,
-                        side=side,
-                        strike=float(opt.get("strike") or 0.0),
-                        expiration=expiration,
-                        bid=float(opt.get("bid") or 0.0),
-                        ask=float(opt.get("ask") or 0.0),
-                        last=float(opt.get("last") or 0.0),
-                        delta=float(greeks.get("delta") or 0.0),
-                        implied_volatility=float(
-                            greeks.get("mid_iv") or greeks.get("smv_vol") or 0.0
-                        ),
-                        volume=int(opt.get("volume") or 0),
-                        open_interest=int(opt.get("open_interest") or 0),
-                    )
+            contracts.extend(self._chain_for_expiration(symbol, side, expiration))
+        return contracts
+
+    def get_option_chain_for_expiration(
+        self, symbol: str, side: Side, expiration: date
+    ) -> list[OptionContract]:
+        """Like ``get_option_chain`` but for a single already-known expiration.
+
+        Marking an existing position to market only ever needs one specific
+        expiration's chain. ``get_option_chain`` has to list every expiration
+        first and fetch each one -- for daily-expiration underlyings like
+        SPY/QQQ that's dozens of requests just to reprice one position. This
+        skips straight to the one date that matters.
+        """
+        return self._chain_for_expiration(symbol, side, expiration)
+
+    def _chain_for_expiration(
+        self, symbol: str, side: Side, expiration: date
+    ) -> list[OptionContract]:
+        data = self._get(
+            "/markets/options/chains",
+            {
+                "symbol": symbol,
+                "expiration": expiration.isoformat(),
+                "greeks": "true",
+            },
+        )
+        options = (data.get("options") or {}).get("option") or []
+        if isinstance(options, dict):
+            options = [options]
+        contracts: list[OptionContract] = []
+        for opt in options:
+            if opt.get("option_type") != side.value:
+                continue
+            greeks = opt.get("greeks") or {}
+            contracts.append(
+                OptionContract(
+                    symbol=opt.get("symbol", ""),
+                    underlying=symbol,
+                    side=side,
+                    strike=float(opt.get("strike") or 0.0),
+                    expiration=expiration,
+                    bid=float(opt.get("bid") or 0.0),
+                    ask=float(opt.get("ask") or 0.0),
+                    last=float(opt.get("last") or 0.0),
+                    delta=float(greeks.get("delta") or 0.0),
+                    implied_volatility=float(
+                        greeks.get("mid_iv") or greeks.get("smv_vol") or 0.0
+                    ),
+                    volume=int(opt.get("volume") or 0),
+                    open_interest=int(opt.get("open_interest") or 0),
                 )
+            )
         return contracts
 
 

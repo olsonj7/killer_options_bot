@@ -13,6 +13,7 @@ placeholders; each backend translates placeholders and dialect-specific SQL.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -829,16 +830,32 @@ class PostgresStorage(BaseStorage):
         self._dsn = dsn
         self._psycopg = psycopg
         self._dict_row = dict_row
+        self._conn = None
+        self._conn_lock = threading.Lock()
         self._init_schema()
+
+    def _live_conn(self):
+        # Reused across calls instead of reconnecting every time: opening a
+        # fresh TLS connection to Supabase per query (previously every single
+        # storage call) was the dominant cost of dashboard page loads.
+        if self._conn is None or self._conn.closed:
+            self._conn = self._psycopg.connect(self._dsn, row_factory=self._dict_row)
+        return self._conn
 
     @contextmanager
     def _connect(self):
-        conn = self._psycopg.connect(self._dsn, row_factory=self._dict_row)
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+        with self._conn_lock:
+            conn = self._live_conn()
+            try:
+                yield conn
+            except self._psycopg.OperationalError:
+                # Connection dropped (e.g. Supabase idle timeout) -- discard it
+                # so the *next* call reconnects instead of retrying the same
+                # dead connection forever.
+                self._conn = None
+                raise
+            else:
+                conn.commit()
 
     def _insert(self, sql: str, params: tuple) -> int:
         sql = self._translate(sql) + " RETURNING id"
