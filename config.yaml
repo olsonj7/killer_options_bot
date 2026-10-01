@@ -37,11 +37,11 @@ account_tiers:
     strategies: [default, zerodte, reversal_0dte, weekly_reversion, swing, leaps, fast_momentum]
     risk:
       max_trade_risk_pct: 0.30
-      # Two concurrent slots max on the smallest account. Combined with the
-      # one-position-per-underlying-per-strategy rule, this keeps the book
-      # small and stops correlated stacking (e.g. multiple SPY calls from one
-      # strategy) that turns one weak read into several losses at once.
-      max_open_positions: 2
+      # Raised 2 -> 4 (2026-10-01): with 7 strategies now active, swing (up to
+      # a 10-day hold) and leaps (up to 60 days) could otherwise tie up a slot
+      # for weeks and starve the faster strategies of entries during the
+      # comparison. Revisit once a clear winner emerges.
+      max_open_positions: 4
     contract_filters:
       min_delta: 0.20
       max_delta: 0.35
@@ -328,10 +328,10 @@ risk:
   max_trade_risk_pct: 0.30
   # Max simultaneous open positions (enforced in paper/live phases).
   max_open_positions: 3
-  # Max new trades logged per calendar week. Lowered 10 -> 6 to force selection:
-  # with a weekly budget the bot must save its entries for the best setups
-  # rather than firing on every marginal signal.
-  max_trades_per_week: 6
+  # Max new trades logged per calendar week. Raised 6 -> 12 (2026-10-01): with
+  # 7 strategies now active (was 4), 6/week split too thin to accumulate a
+  # usable comparison sample per strategy in reasonable time.
+  max_trades_per_week: 12
 
 contract_filters:
   # Weekly / short-dated horizon for a small-account challenge.
