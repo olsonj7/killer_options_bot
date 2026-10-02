@@ -848,11 +848,17 @@ class PostgresStorage(BaseStorage):
             conn = self._live_conn()
             try:
                 yield conn
-            except self._psycopg.OperationalError:
-                # Connection dropped (e.g. Supabase idle timeout) -- discard it
-                # so the *next* call reconnects instead of retrying the same
-                # dead connection forever.
-                self._conn = None
+            except Exception:
+                # ANY error (not just a dropped connection) leaves a Postgres
+                # connection in an aborted-transaction state where every
+                # further query fails until a ROLLBACK -- without this, one
+                # unrelated bad query would brick all DB access until the
+                # process restarted. Roll back so the connection stays usable;
+                # if even that fails, discard it so the next call reconnects.
+                try:
+                    conn.rollback()
+                except Exception:
+                    self._conn = None
                 raise
             else:
                 conn.commit()
