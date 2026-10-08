@@ -73,10 +73,11 @@ def test_scan_skips_held_underlying(tmp_path):
     assert storage.recent_candidates(limit=100) == []
 
 
-def test_scan_not_skipped_for_other_strategy(tmp_path):
-    # The held-underlying skip is per (strategy, underlying): a position opened
-    # by ANOTHER strategy must not hide an opportunity for this one (e.g. a
-    # weekly swing hold should not suppress a 0DTE scalp on the same name).
+def test_scan_skipped_for_other_strategy(tmp_path):
+    # Changed 2026-10-08: the held-underlying skip is now GLOBAL -- a position
+    # opened by ANOTHER strategy DOES suppress new candidates on the same name
+    # (e.g. a weekly swing hold now blocks a 0DTE scalp on the same name, to
+    # avoid doubled-up exposure to one underlying).
     from datetime import timedelta
 
     from killer_options_bot.models import PaperPosition, PositionStatus, Side
@@ -104,10 +105,9 @@ def test_scan_not_skipped_for_other_strategy(tmp_path):
         )
     )
 
-    # The default strategy still scans SPY and produces its candidate.
-    candidate = scanner.scan_symbol_strategy("SPY", strategy)
-    assert candidate is not None
-    assert candidate.contract.underlying == "SPY"
+    # The default strategy skips SPY entirely: no candidate, nothing logged.
+    assert scanner.scan_symbol_strategy("SPY", strategy) is None
+    assert storage.recent_candidates(limit=100) == []
 
 
 # --- conflict_group: cadence-mates must not hold opposite sides -----------
@@ -194,7 +194,12 @@ def test_conflict_group_blocks_opposite_side_across_strategies(tmp_path):
     assert scanner.scan_symbol_strategy("AAPL", default_strategy) is None
 
 
-def test_no_conflict_group_allows_opposite_side(tmp_path):
+def test_global_underlying_block_supersedes_conflict_group(tmp_path):
+    # Changed 2026-10-08: the global one-position-per-underlying check runs
+    # before the conflict_group opposite-side check, so even a strategy with
+    # no conflict_group configured is still blocked from opening AAPL here --
+    # any open position on a name now blocks any other strategy's new entry,
+    # same side or opposite.
     from datetime import timedelta
 
     from killer_options_bot.models import PaperPosition, PositionStatus
@@ -209,8 +214,8 @@ def test_no_conflict_group_allows_opposite_side(tmp_path):
                 signal="momentum",
                 filters=base.filters,
                 exits=base.exits,
-                # No conflict_group set -- unaffected by other strategies'
-                # positions.
+                # No conflict_group set -- irrelevant now, the global
+                # held-underlying check blocks first regardless.
             ),
         ),
     )
@@ -235,6 +240,5 @@ def test_no_conflict_group_allows_opposite_side(tmp_path):
     )
 
     default_strategy = config.active_strategies[0]
-    candidate = scanner.scan_symbol_strategy("AAPL", default_strategy)
-    assert candidate is not None
-    assert candidate.side is Side.PUT
+    assert scanner.scan_symbol_strategy("AAPL", default_strategy) is None
+

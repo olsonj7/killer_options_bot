@@ -132,10 +132,11 @@ def test_one_position_per_underlying(tmp_path):
     assert engine.storage.count_open_positions() == 1
 
 
-def test_other_strategy_may_hold_same_underlying(tmp_path):
-    # The per-underlying block is scoped to the strategy: a weekly (default)
-    # AAPL hold must NOT block a 0DTE-style strategy from opening its own AAPL
-    # position, and vice versa. Different timeframes are independent trades.
+def test_other_strategy_may_not_hold_same_underlying(tmp_path):
+    # Changed 2026-10-08: the per-underlying block is now GLOBAL across
+    # strategies -- a weekly (default) AAPL hold DOES block a 0DTE-style
+    # strategy from opening its own AAPL position. Two strategies holding the
+    # same name was doubled-up exposure, not an independent bet.
     from dataclasses import replace
 
     from killer_options_bot.config import RiskConfig
@@ -155,7 +156,7 @@ def test_other_strategy_may_hold_same_underlying(tmp_path):
     first = make_candidate(as_of)  # strategy "default"
     assert engine.open_from_candidate(first) is not None
 
-    # Same underlying, different contract, DIFFERENT strategy -> allowed.
+    # Same underlying, different contract, DIFFERENT strategy -> now blocked.
     other = replace(
         first,
         contract=replace(
@@ -165,16 +166,8 @@ def test_other_strategy_may_hold_same_underlying(tmp_path):
         ),
         strategy="zerodte",
     )
-    assert engine.open_from_candidate(other) is not None
-    assert engine.storage.count_open_positions() == 2
-
-    # But the SAME strategy stacking on the name is still blocked.
-    third = replace(
-        other,
-        contract=replace(other.contract, symbol="AAPL260315C00165000", strike=165.0),
-    )
-    assert engine.open_from_candidate(third) is None
-    assert engine.storage.count_open_positions() == 2
+    assert engine.open_from_candidate(other) is None
+    assert engine.storage.count_open_positions() == 1
 
 
 def test_blocked_candidate_is_annotated(tmp_path):

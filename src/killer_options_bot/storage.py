@@ -659,12 +659,12 @@ class BaseStorage:
     def has_open_underlying(self, underlying: str, strategy: str | None = None) -> bool:
         """True if an open position exists on this underlying symbol.
 
-        With ``strategy`` given, only positions opened by that strategy count.
-        This blocks stacking multiple strikes/sides on the same name WITHIN a
-        strategy (e.g. two 0DTE SPY calls) while still letting different
-        strategies hold the same underlying on different timeframes (a weekly
-        swing call and an intraday 0DTE scalp are independent trades).
-        Without ``strategy``, any open position on the name matches.
+        Callers now pass no ``strategy`` (the default) to block ANY new
+        position on a name already held by any strategy -- changed 2026-10-08
+        after live trades showed two strategies (e.g. a weekly swing call and
+        a 0DTE scalp) both holding the same underlying is doubled-up exposure,
+        not an independent bet. ``strategy`` is still accepted for callers
+        that specifically want a per-strategy check.
         """
         if strategy is not None:
             row = self._query_one(

@@ -149,17 +149,13 @@ class PaperEngine:
                     f"for {candidate.strategy}",
                 )
                 return None
-        # One position per (strategy, underlying): never stack multiple
-        # strikes/sides on the same name within a strategy. Different
-        # strategies may hold the same underlying on different timeframes
-        # (weekly swing + 0DTE scalp are independent trades).
-        if self.storage.has_open_underlying(
-            candidate.contract.underlying, candidate.strategy
-        ):
+        # One position per underlying, GLOBALLY across all strategies: never
+        # stack multiple strikes/sides/strategies on the same name at once.
+        if self.storage.has_open_underlying(candidate.contract.underlying):
             self._note_blocked(
                 candidate,
-                f"blocked: {candidate.strategy} already holding "
-                f"{candidate.contract.underlying}",
+                f"blocked: already holding {candidate.contract.underlying} "
+                "(another strategy)",
             )
             return None
 

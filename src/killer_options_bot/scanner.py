@@ -537,14 +537,16 @@ class Scanner:
         The strategy's own filters/exits drive contract selection and risk, so
         a 0DTE scalp and a LEAPS hold evaluate independently on the same name.
         """
-        # One position per (strategy, underlying): if this strategy already
-        # holds the name, there is nothing actionable to scan for -- a new
-        # candidate could only be blocked at open. Skip early so we neither log
-        # noise (a wall of "already holding" rows) nor spend a chain fetch on
-        # it. A different strategy holding the same name does NOT skip: a
-        # weekly swing position must not hide a 0DTE opportunity (and vice
-        # versa). Exit management for open positions runs separately every tick.
-        if self.storage.has_open_underlying(symbol, strategy.name):
+        # One position per underlying, GLOBALLY across all strategies: if ANY
+        # strategy already holds this name, there is nothing actionable to
+        # scan for -- a new candidate could only be blocked at open. Skip
+        # early so we neither log noise (a wall of "already holding" rows) nor
+        # spend a chain fetch on it. Changed 2026-10-08 from a per-strategy
+        # check (which let e.g. a weekly swing and a 0DTE scalp both hold NVDA
+        # at once) after live trades showed that's just doubled-up exposure to
+        # the same name, not independent bets. Exit management for open
+        # positions runs separately every tick.
+        if self.storage.has_open_underlying(symbol):
             return None
 
         # Skip the low-volume midday chop window (noon–2 pm ET) when the
