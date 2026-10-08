@@ -18,9 +18,14 @@ account:
 # market data yet. Tune them after a Tradier backtest shows real behaviour.
 account_tiers:
   - min_value: 0        # $0 - $5k: survival. Cheap OTM weeklies, tight stops.
-    # Small account stays on the two most liquid ETFs only. Tight spreads and
-    # deep options chains matter far more than variety when capital is tiny.
-    watchlist: [SPY, QQQ]
+    # Expanded 2026-10-08 (paper-only): SPY/QQQ alone meant 7 strategies were
+    # really just ~2 independent opinions (default/swing/leaps share the same
+    # momentum signal; zerodte/reversal_0dte/fast_momentum share intraday
+    # signals) -- a week straight of zero candidates traced to two highly
+    # correlated index ETFs grinding slowly higher, not a code bug. Added the
+    # "Big 7" mega-caps for uncorrelated, higher-beta opportunity surface.
+    # Liquid, deep chains, daily/weekly expirations all available.
+    watchlist: [SPY, QQQ, AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA]
     # Base weekly momentum trade PLUS 0DTE, enabled here to forward-test the
     # 0DTE playbook on live Tradier data (PAPER ONLY - no real capital). 0DTE is
     # the highest-variance mode; keep it on paper until real results prove out.
@@ -361,7 +366,13 @@ signal:
   # Tighter RSI band (was 45): a call now needs RSI >= 50, i.e. real strength
   # rather than a barely-positive drift. Puts still require RSI < this floor.
   rsi_min: 50
-  rsi_max: 70
+  # Raised 70 -> 80 (2026-10-08): a strict 70 ceiling treated a sustained,
+  # low-volatility uptrend (RSI pinned in the 80s for a full week on SPY/QQQ)
+  # as permanently "overheated", locking out every momentum/intraday signal
+  # at once since none of them require a pullback first. 80 still blocks
+  # genuine blow-off extremes while allowing a strong persistent trend to
+  # keep registering as bullish.
+  rsi_max: 80
   # Quality gates that make entries far pickier (both signals use these):
   #  - price must sit at least this fraction BEYOND the SMA, not just on the
   #    right side of it, so noise around the mean does not trigger a trade.
@@ -396,8 +407,12 @@ signal:
   # close over the last sr_lookback daily bars (likely support / bounce zone),
   # and refuse a CALL within that buffer of the highest close (likely
   # resistance / rejection zone). 0 disables; set > 0 to arm.
+  # Narrowed 1% -> 0.5% (2026-10-08): SPY/QQQ typically move <1%/day, so a 1%
+  # band around the rolling 20-day high meant every slow grind to a new high
+  # stayed "at resistance" indefinitely -- it was blocking routine
+  # continuation, not just chases of an old ceiling.
   sr_lookback: 20
-  sr_buffer_pct: 0.01
+  sr_buffer_pct: 0.005
   # Short-term reversal guard: refuse a CALL when the raw daily closes have
   # fallen for this many straight bars (a fresh pullback), and refuse a PUT on
   # the mirror (a fresh bounce), even if RSI/SMA above still read bullish/
