@@ -839,7 +839,19 @@ class PostgresStorage(BaseStorage):
         # fresh TLS connection to Supabase per query (previously every single
         # storage call) was the dominant cost of dashboard page loads.
         if self._conn is None or self._conn.closed:
-            self._conn = self._psycopg.connect(self._dsn, row_factory=self._dict_row)
+            self._conn = self._psycopg.connect(
+                self._dsn,
+                row_factory=self._dict_row,
+                # Supabase's DSN goes through a transaction-mode pooler
+                # (pgbouncer/Supavisor): server-side prepared statements are
+                # scoped to the pooler's backend connection, not our client
+                # connection, so once psycopg auto-prepares a repeated query
+                # (its default behavior after 5 uses) a different pooled
+                # client can collide on the same auto-generated statement
+                # name -> psycopg.errors.DuplicatePreparedStatement on every
+                # request. Disable auto-preparation entirely.
+                prepare_threshold=None,
+            )
         return self._conn
 
     @contextmanager
