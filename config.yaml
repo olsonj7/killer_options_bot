@@ -290,11 +290,16 @@ strategies:
       stop_loss_pct: 0.40
       max_holding_days: 10
       min_dte_exit: 2
-      # Trend trade: let winners run. Once up +30% a trailing stop arms and
-      # replaces the fixed profit target, exiting only after the option mid
-      # gives back 20% from its high-water peak. Stop/max-hold/DTE still apply.
-      trail_activate_pct: 0.30
-      trail_pct: 0.20
+      # Trend trade: let winners run. Once up +25% a trailing stop arms,
+      # exiting after the option mid gives back 12% from its high-water peak
+      # (tightened 2026-10-13: at this account size positions almost always
+      # size to 1 contract, so the trim ladder below can never fire -- the
+      # trailing stop is the ONLY profit protection, and the old 30%/20%
+      # setting let winners that peaked +30-126% round-trip back to +0-50%
+      # before exiting). profit_target_pct is also a hard ceiling: hitting it
+      # locks in the gain immediately instead of waiting on the trail.
+      trail_activate_pct: 0.25
+      trail_pct: 0.12
   leaps:
     # Long-dated, high-conviction directional bets. Deep-ish delta for share
     # substitution, patient hold measured in weeks, exit well before expiry.
@@ -313,10 +318,11 @@ strategies:
       max_holding_days: 60
       min_dte_exit: 30
       # High-conviction long-dated bet: ride the trend. Arm the trailing stop
-      # after +50% and give the runner a wider 30% give-back band so normal
-      # multi-week volatility doesn't shake it out of a big move.
+      # after +50%; give-back band tightened 2026-10-13 (30% -> 20%) for the
+      # same single-contract-sizing reason as swing above -- still wider than
+      # swing's since LEAPS holds are measured in weeks, not days.
       trail_activate_pct: 0.50
-      trail_pct: 0.30
+      trail_pct: 0.20
 
 
 mode:

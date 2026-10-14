@@ -192,6 +192,18 @@ class PaperEngine:
             # Trailing stop replaces the fixed profit target so the runner can
             # ride. It arms only once profit reaches trail_activate_pct, then
             # exits when the mid gives back trail_pct from its high-water mark.
+            #
+            # Small accounts almost always size to a single contract, so the
+            # trim ladder above can never fire (it requires >= 2 contracts to
+            # scale out of). With no partial banking, the trailing stop was
+            # the ONLY protection on a winner, and letting it ride all the way
+            # to trail_activate_pct + however high the peak went meant giving
+            # back the bulk of large gains (e.g. a +126% peak round-tripping
+            # to +52%). profit_target_pct now also acts as a hard ceiling: if
+            # the position ever reaches it, bank it immediately rather than
+            # waiting for a trail_pct giveback from a possibly much higher peak.
+            if pl_pct >= e.profit_target_pct:
+                return f"profit target hit (+{pl_pct:.0%})"
             peak = position.high_water_mark or position.entry_price
             peak_pl = (peak - position.entry_price) / position.entry_price
             if peak_pl >= e.trail_activate_pct:

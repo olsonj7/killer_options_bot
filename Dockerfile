@@ -27,5 +27,10 @@ COPY config.yaml ./config.yaml
 # real market data. --run also starts the automated scan/manage loop in the
 # same process (market-hours aware); disable it with KOB_RUN=0 if you only want
 # the dashboard.
+# --run-tick 30 (default is 60s): exits/trails are polled, not real broker
+# stop orders, so each tick is a window where a cheap, gamma-heavy short-dated
+# option can gap past a configured stop/trail before it's caught. Halving the
+# poll interval halves that slippage window (found 2026-10-13: a 25% stop on
+# a sub-$1 contract was seen overshooting to -41% between two 60s ticks).
 EXPOSE 8787
-CMD ["killer-options-bot", "serve", "--host", "0.0.0.0", "--run"]
+CMD ["killer-options-bot", "serve", "--host", "0.0.0.0", "--run", "--run-tick", "30"]

@@ -367,8 +367,9 @@ def test_trailing_stop_does_not_fire_above_trigger(tmp_path):
                          Storage(config.db_path), as_of=as_of)
     pos = _position(as_of, 1.00)
     pos.high_water_mark = 1.50  # armed (+50%), trigger at 1.20
-    assert engine.exit_reason(pos, 1.50) is None  # at the peak
-    assert engine.exit_reason(pos, 1.30) is None  # pullback above trigger
+    # 1.50 is above the 0.35 fixed target, so the hard cap takes it here.
+    assert engine.exit_reason(pos, 1.50) is not None
+    assert engine.exit_reason(pos, 1.30) is None  # pullback above trigger, below cap
 
 
 def test_trailing_stop_fires_on_giveback(tmp_path):
@@ -382,16 +383,19 @@ def test_trailing_stop_fires_on_giveback(tmp_path):
     assert reason is not None and "trailing stop" in reason
 
 
-def test_trailing_stop_lets_winner_run_past_fixed_target(tmp_path):
+def test_trailing_stop_fixed_target_is_a_hard_ceiling(tmp_path):
+    # profit_target_pct now also acts as a hard cap even with trailing
+    # enabled: a single-contract position can't partially bank via the trim
+    # ladder, so letting a winner ride indefinitely past the fixed target
+    # risks giving back most of a big peak before the trail catches it.
     config = _trailing_config(tmp_path)
     as_of = date(2026, 1, 1)
     engine = PaperEngine(config, MockMarketData(as_of=as_of),
                          Storage(config.db_path), as_of=as_of)
     pos = _position(as_of, 1.00)
     pos.high_water_mark = 2.00
-    # +100% would have closed under the fixed 0.35 target; with trailing the
-    # runner keeps going and only the trail (or stop) exits.
-    assert engine.exit_reason(pos, 2.00) is None
+    reason = engine.exit_reason(pos, 2.00)
+    assert reason is not None and "profit target" in reason
 
 
 def test_trailing_stop_loss_still_applies(tmp_path):
