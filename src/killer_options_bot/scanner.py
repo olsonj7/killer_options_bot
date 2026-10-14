@@ -480,16 +480,26 @@ def strat_breakout_signal(quote: Quote, cfg: Config) -> Signal:
 def _best_contract(
     contracts: list[OptionContract], cfg: Config, as_of: date
 ) -> OptionContract | None:
-    """Pick the in-band contract whose delta is closest to the band midpoint."""
+    """Pick the in-band contract whose delta is closest to the band midpoint.
+
+    Also drops contracts the account could never afford (cost over the max
+    trade risk budget) before picking, so a signal on a high-priced
+    underlying (e.g. a deep-ITM LEAPS call on TSLA/META) doesn't surface a
+    $3k-$17k "candidate" that only exists to be rejected by RiskEngine for
+    cost. If every contract in band is unaffordable there is nothing
+    actionable here -- decline rather than log noise.
+    """
     f = cfg.filters
+    max_trade_risk = cfg.account_value * cfg.risk.max_trade_risk_pct
+    affordable = [c for c in contracts if c.cost <= max_trade_risk]
     target_delta = (f.min_delta + f.max_delta) / 2
     in_band = [
         c
-        for c in contracts
+        for c in affordable
         if f.min_dte <= c.dte(as_of) <= f.max_dte
         and f.min_delta <= abs(c.delta) <= f.max_delta
     ]
-    pool = in_band or contracts
+    pool = in_band or affordable
     if not pool:
         return None
     return min(pool, key=lambda c: abs(abs(c.delta) - target_delta))
