@@ -17,6 +17,7 @@ from datetime import date
 
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config
+from killer_options_bot.indicators import fib_extension_levels
 from killer_options_bot.models import (
     Candidate,
     CostModel,
@@ -26,6 +27,11 @@ from killer_options_bot.models import (
     Side,
 )
 from killer_options_bot.storage import Storage
+
+#: Classic Fibonacci extension multiples, nearest-first, mapped onto a
+#: strategy's trim rungs in order when ``exits.fib_trim_enabled`` is set.
+_FIB_MULTIPLES = (1.272, 1.618, 2.0, 2.618)
+
 
 
 @dataclass
@@ -243,6 +249,56 @@ class PaperEngine:
 
     # --- Managing open positions ------------------------------------------
 
+    def _fib_levels(
+        self, position: PaperPosition
+    ) -> tuple[list[float], float] | None:
+        """Fib extension price targets + current underlying price, or None.
+
+        Projects classic extension multiples (1.272x, 1.618x, ...) off the
+        swing low/high over the last ``signal.sr_lookback`` daily closes
+        (the same window the support/resistance entry gate uses), one level
+        per configured trim rung. Returns None when fib trims are disabled
+        for this strategy or there isn't yet enough close history to measure
+        a swing.
+        """
+        e = self._exits_for(position)
+        if not e.fib_trim_enabled:
+            return None
+        lookback = self.config.signal.sr_lookback
+        quote = self.data.get_quote(position.underlying)
+        history = quote.closes[:-1] if quote.closes else []
+        if lookback <= 0 or len(history) < lookback:
+            return None
+        window = history[-lookback:]
+        low, high = min(window), max(window)
+        levels = fib_extension_levels(
+            low, high, position.side is Side.CALL, _FIB_MULTIPLES
+        )
+        levels = levels[: len(e.trims)]
+        return (levels, quote.last) if levels else None
+
+    def _rung_ready(
+        self,
+        position: PaperPosition,
+        rung: int,
+        pl_pct: float,
+        fib_levels: list[float] | None,
+        underlying_last: float | None,
+    ) -> tuple[bool, str]:
+        """Whether trim rung ``rung`` has triggered, and a reason suffix."""
+        e = self._exits_for(position)
+        if fib_levels is not None and rung < len(fib_levels):
+            level = fib_levels[rung]
+            hit = (
+                underlying_last >= level
+                if position.side is Side.CALL
+                else underlying_last <= level
+            )
+            mult = _FIB_MULTIPLES[rung] if rung < len(_FIB_MULTIPLES) else None
+            suffix = f"fib {mult}x hit, underlying {underlying_last:.2f}"
+            return hit, suffix
+        return pl_pct >= e.trims[rung].at_pct, f"{pl_pct:+.0%}"
+
     def _maybe_trim(
         self, position: PaperPosition, contract
     ) -> tuple[int, float]:
@@ -252,13 +308,17 @@ class PaperEngine:
         banking the realized P/L while leaving a runner. Returns
         ``(contracts_trimmed, dollars_banked)`` for this tick. If a trim would
         take the entire remaining position it becomes a full close (the final
-        leg) and ``position.status`` is set to CLOSED.
+        leg) and ``position.status`` is set to CLOSED. Rungs trigger off the
+        option's own pl_pct by default, or off Fibonacci extension levels on
+        the underlying when ``exits.fib_trim_enabled`` is set.
         """
         e = self._exits_for(position)
         if not e.trims:
             return 0, 0.0
         orig = position.original_quantity or position.quantity
         pl_pct = position.pl_pct(contract.mid)
+        fib = self._fib_levels(position)
+        fib_levels, underlying_last = fib if fib is not None else (None, None)
 
         if orig < 2:
             # Cannot scale OUT of a single contract -- but there's still a
@@ -267,10 +327,13 @@ class PaperEngine:
             # 1-contract position (the common case at this account size)
             # rides entirely on the looser profit target / trailing stop,
             # giving back most of a big peak before it ever locks in a gain.
-            if position.trims_done > 0 or pl_pct < e.trims[0].at_pct:
+            ready, suffix = self._rung_ready(
+                position, 0, pl_pct, fib_levels, underlying_last
+            )
+            if position.trims_done > 0 or not ready:
                 return 0, 0.0
             fill = self._exit_price(contract)
-            reason = f"trim 1 closed (single contract, {pl_pct:+.0%})"
+            reason = f"trim 1 closed (single contract, {suffix})"
             self.storage.close_position(position.id, fill, self.as_of, reason)
             position.status = PositionStatus.CLOSED
             position.exit_price = fill
@@ -282,7 +345,10 @@ class PaperEngine:
         banked_total = 0.0
         while position.trims_done < len(e.trims):
             rule = e.trims[position.trims_done]
-            if pl_pct < rule.at_pct:
+            ready, suffix = self._rung_ready(
+                position, position.trims_done, pl_pct, fib_levels, underlying_last
+            )
+            if not ready:
                 break
             contracts = max(1, int(orig * rule.fraction))
             fill = self._exit_price(contract)
@@ -290,7 +356,7 @@ class PaperEngine:
                 # Trim would empty the position: close the remainder outright.
                 reason = (
                     f"trim {position.trims_done + 1} closed runner "
-                    f"({pl_pct:+.0%})"
+                    f"({suffix})"
                 )
                 remainder = position.quantity
                 self.storage.close_position(

@@ -118,8 +118,14 @@ class ExitConfig:
     #: REPLACES the fixed ``profit_target_pct`` so winners can run; the stop
     #: loss, max-hold and DTE exits still apply. 0 disables trailing.
     trail_pct: float = 0.0
-    trail_activate_pct: float = 0.0
-
+    trail_activate_pct: float = 0.0    #: When True, ``trims`` rungs fire off Fibonacci extension price targets
+    #: on the UNDERLYING (projected from the swing low/high over
+    #: ``signal.sr_lookback`` daily closes) instead of the option's own
+    #: pl_pct. Each configured trim rung is mapped onto the Nth classic
+    #: extension multiple (1.272x, 1.618x, 2.0x, 2.618x in order); ``at_pct``
+    #: on those rungs is then unused for triggering (fractions still apply).
+    #: False (default) keeps the existing pl_pct-based ladder.
+    fib_trim_enabled: bool = False
     @property
     def trailing_enabled(self) -> bool:
         return self.trail_pct > 0.0
@@ -416,6 +422,7 @@ def _build_exits(d: dict) -> ExitConfig:
         trims=trims,
         trail_pct=float(d.get("trail_pct", 0.0)),
         trail_activate_pct=float(d.get("trail_activate_pct", 0.0)),
+        fib_trim_enabled=bool(d.get("fib_trim_enabled", False)),
     )
     if cfg.profit_target_pct <= 0:
         raise ValueError("exits.profit_target_pct must be positive")

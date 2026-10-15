@@ -46,3 +46,26 @@ def rsi(values: list[float], period: int = 14) -> float | None:
         return 100.0
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
+
+
+def fib_extension_levels(
+    low: float,
+    high: float,
+    bullish: bool,
+    multiples: tuple[float, ...] = (1.272, 1.618, 2.0, 2.618),
+) -> list[float]:
+    """Classic Fibonacci extension price targets projected beyond a swing.
+
+    ``low``/``high`` bound the impulse leg being extended (a recent swing
+    low/high in the underlying). For a bullish leg the targets project ABOVE
+    ``high`` by each multiple of the leg's range; for a bearish leg they
+    project BELOW ``low``. Levels are returned nearest-first (ascending
+    ``multiples`` means ascending distance from the swing). Returns an empty
+    list when the range is zero or negative (no real swing to extend).
+    """
+    rng = high - low
+    if rng <= 0:
+        return []
+    if bullish:
+        return [round(high + rng * m, 4) for m in multiples]
+    return [round(low - rng * m, 4) for m in multiples]

@@ -304,6 +304,21 @@ strategies:
       # locks in the gain immediately instead of waiting on the trail.
       trail_activate_pct: 0.25
       trail_pct: 0.12
+      # Pilot (2026-10-15): bank part of the position the first time the
+      # underlying clears its nearest Fibonacci extension (1.272x of the
+      # swing low/high measured over signal.sr_lookback daily closes, then
+      # 1.618x for a second rung), instead of a fixed option-premium
+      # percentage -- this reacts to price STRUCTURE rather than an
+      # arbitrary theta-inflated option gain. The remainder keeps riding the
+      # trailing stop above. at_pct values below are vestigial for triggering
+      # purposes once fib_trim_enabled is true (only fraction is used); NOTE
+      # production currently has a DB override on swing.exits.trim_0_*/
+      # trim_1_* (0.30/0.5, 0.50/0.25) that replaces this list entirely --
+      # the DB values are what's actually live, this is just the fallback.
+      fib_trim_enabled: true
+      trims:
+        - at_pct: 0.25
+          fraction: 0.5
   leaps:
     # Long-dated, high-conviction directional bets. Deep-ish delta for share
     # substitution, patient hold measured in weeks, exit well before expiry.

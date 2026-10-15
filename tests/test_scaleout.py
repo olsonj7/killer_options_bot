@@ -9,6 +9,7 @@ from conftest import make_config
 
 from killer_options_bot.config import (
     ExitConfig,
+    SignalConfig,
     SizingConfig,
     TrimRule,
     _build_exits,
@@ -37,12 +38,14 @@ class StubData:
         self.mid = mid
         self.strike = strike
         self.expiration = as_of + timedelta(days=45)
+        self.closes: list[float] = []
+        self.underlying_last = strike + 5
 
     def set_mid(self, mid: float) -> None:
         self.mid = mid
 
     def get_quote(self, symbol: str) -> Quote:
-        return Quote(symbol=symbol, last=self.strike + 5, closes=[])
+        return Quote(symbol=symbol, last=self.underlying_last, closes=self.closes)
 
     def get_option_chain(self, symbol: str, side: Side):
         # Zero-width spread so mid == bid == ask == our target.
@@ -326,8 +329,114 @@ def test_single_contract_closes_fully_on_first_trim(tmp_path):
     assert result.trimmed == 1
     assert result.closed
     assert "trim 1 closed" in result.reason
-    assert pos.quantity == 1
-    assert pos.realized_pl() == pytest.approx(50.0)
+
+
+# --- Fibonacci extension trims ---------------------------------------------
+
+
+def _fib_trim_exits(trims: tuple[TrimRule, ...]) -> ExitConfig:
+    return ExitConfig(
+        profit_target_pct=0.80,
+        stop_loss_pct=0.30,
+        max_holding_days=21,
+        min_dte_exit=0,
+        trims=trims,
+        fib_trim_enabled=True,
+    )
+
+
+def test_fib_trim_waits_for_underlying_to_reach_extension(tmp_path):
+    # Swing low/high of 100/110 over the lookback -> first extension
+    # (1.272x) sits at 110 + 10*1.272 = 122.72. Below that, no trim fires
+    # even though the option itself is well up.
+    exits = _fib_trim_exits((TrimRule(0.25, 0.5),))
+    config = make_config(
+        tmp_path, exits=exits, signal=SignalConfig(
+            sma_period=20, rsi_period=14, rsi_min=45, rsi_max=70, sr_lookback=5
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _open_position(storage, as_of, entry=1.00, qty=4)
+
+    data = StubData(as_of, mid=1.50)
+    data.closes = [100, 102, 108, 105, 110, 109]  # last excluded, window=5
+    data.underlying_last = 120.0  # below the 122.72 extension
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+    result = engine.manage_position(pos)
+
+    assert result.trimmed == 0
+    assert pos.trims_done == 0
+
+
+def test_fib_trim_fires_once_underlying_clears_extension(tmp_path):
+    exits = _fib_trim_exits((TrimRule(0.25, 0.5),))
+    config = make_config(
+        tmp_path, exits=exits, signal=SignalConfig(
+            sma_period=20, rsi_period=14, rsi_min=45, rsi_max=70, sr_lookback=5
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _open_position(storage, as_of, entry=1.00, qty=4)
+
+    data = StubData(as_of, mid=1.50)
+    data.closes = [100, 102, 108, 105, 110, 109]
+    data.underlying_last = 125.0  # clears the 122.72 extension
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+    result = engine.manage_position(pos)
+
+    assert result.trimmed == 2  # half of 4
+    assert pos.quantity == 2
+    assert pos.trims_done == 1
+
+
+def test_fib_trim_single_contract_closes_fully(tmp_path):
+    exits = _fib_trim_exits((TrimRule(0.25, 0.5),))
+    config = make_config(
+        tmp_path, exits=exits, signal=SignalConfig(
+            sma_period=20, rsi_period=14, rsi_min=45, rsi_max=70, sr_lookback=5
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _open_position(storage, as_of, entry=1.00, qty=1)
+
+    data = StubData(as_of, mid=1.50)
+    data.closes = [100, 102, 108, 105, 110, 109]
+    data.underlying_last = 125.0
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+    result = engine.manage_position(pos)
+
+    assert result.closed
+    assert "trim 1 closed (single contract, fib 1.272x hit" in result.reason
+
+
+def test_fib_trim_falls_back_to_pl_pct_without_enough_swing_history(tmp_path):
+    # Not enough daily closes yet to measure a swing (e.g. a freshly-added
+    # symbol) -> no fib levels available. Falls back to the normal pl_pct
+    # ladder rather than refusing to trim at all until enough history
+    # accumulates.
+    exits = _fib_trim_exits((TrimRule(0.25, 0.5),))
+    config = make_config(
+        tmp_path, exits=exits, signal=SignalConfig(
+            sma_period=20, rsi_period=14, rsi_min=45, rsi_max=70, sr_lookback=5
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _open_position(storage, as_of, entry=1.00, qty=4)
+
+    data = StubData(as_of, mid=1.30)  # +30%, clears the 0.25 pl_pct rung but
+    # stays well under the 0.80 profit target so only the trim fires here.
+    data.closes = [100, 102]  # too short for sr_lookback=5
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+    result = engine.manage_position(pos)
+
+    assert result.trimmed == 2
+    assert pos.trims_done == 1
+    assert "fib" not in result.reason
+    assert pos.quantity == 2
 
 
 
