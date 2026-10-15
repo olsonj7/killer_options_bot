@@ -258,11 +258,26 @@ class PaperEngine:
         if not e.trims:
             return 0, 0.0
         orig = position.original_quantity or position.quantity
-        if orig < 2:
-            # Cannot scale out of a single contract.
-            return 0, 0.0
-
         pl_pct = position.pl_pct(contract.mid)
+
+        if orig < 2:
+            # Cannot scale OUT of a single contract -- but there's still a
+            # trim ladder to honor, so treat the first rung as a full exit
+            # instead of silently never trimming at all. Otherwise a
+            # 1-contract position (the common case at this account size)
+            # rides entirely on the looser profit target / trailing stop,
+            # giving back most of a big peak before it ever locks in a gain.
+            if position.trims_done > 0 or pl_pct < e.trims[0].at_pct:
+                return 0, 0.0
+            fill = self._exit_price(contract)
+            reason = f"trim 1 closed (single contract, {pl_pct:+.0%})"
+            self.storage.close_position(position.id, fill, self.as_of, reason)
+            position.status = PositionStatus.CLOSED
+            position.exit_price = fill
+            position.exit_date = self.as_of
+            position.exit_reason = reason
+            return position.quantity, 0.0
+
         trimmed_total = 0
         banked_total = 0.0
         while position.trims_done < len(e.trims):

@@ -307,7 +307,12 @@ def test_final_trim_closes_the_runner(tmp_path):
     assert closed[0].realized_pl() == pytest.approx(240.0)
 
 
-def test_no_trim_for_single_contract(tmp_path):
+def test_single_contract_closes_fully_on_first_trim(tmp_path):
+    # A single contract can't be partially scaled out of, so the first trim
+    # rung becomes a full exit instead of being silently skipped -- otherwise
+    # a 1-contract position (the common case at this account size) would
+    # ride entirely on the profit target / trailing stop with no profit
+    # locked in along the way.
     exits = _trim_exits((TrimRule(0.25, 0.5),))
     config = make_config(tmp_path, exits=exits)
     as_of = date(2026, 1, 1)
@@ -318,10 +323,12 @@ def test_no_trim_for_single_contract(tmp_path):
     engine = PaperEngine(config, data, storage, as_of=as_of)
     result = engine.manage_position(pos)
 
-    assert result.trimmed == 0
-    assert not result.closed
+    assert result.trimmed == 1
+    assert result.closed
+    assert "trim 1 closed" in result.reason
     assert pos.quantity == 1
-    assert pos.trims_done == 0
+    assert pos.realized_pl() == pytest.approx(50.0)
+
 
 
 def test_trim_then_terminal_exit_on_runner(tmp_path):
