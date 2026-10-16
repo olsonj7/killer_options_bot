@@ -80,6 +80,14 @@ class SignalConfig:
     # rollover the daily signal can still look "healthy" from a big prior run
     # while price is already reversing. 0 disables (default).
     reversal_streak_days: int = 0
+    # RSI extremes for the *reversal/fade* signals (intraday_reversal,
+    # daily_reversal) -- deliberately separate from rsi_min/rsi_max above.
+    # Those are tuned for momentum CONTINUATION (e.g. rsi_min=50 just means
+    # "not actively weak"), which is far too loose a bar for calling something
+    # "oversold" to fade; reusing them made weekly_reversion buy bounce calls
+    # on any mild dip below RSI 50, not a genuine capitulation extreme.
+    reversal_rsi_min: float = 30.0
+    reversal_rsi_max: float = 70.0
 
 
 @dataclass(frozen=True)
@@ -549,6 +557,8 @@ def load_config(
         sr_lookback=int(signal.get("sr_lookback", 0)),
         sr_buffer_pct=float(signal.get("sr_buffer_pct", 0.01)),
         reversal_streak_days=int(signal.get("reversal_streak_days", 0)),
+        reversal_rsi_min=float(signal.get("reversal_rsi_min", 30.0)),
+        reversal_rsi_max=float(signal.get("reversal_rsi_max", 70.0)),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(

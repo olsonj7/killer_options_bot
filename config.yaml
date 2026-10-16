@@ -46,7 +46,11 @@ account_tiers:
       # a 10-day hold) and leaps (up to 60 days) could otherwise tie up a slot
       # for weeks and starve the faster strategies of entries during the
       # comparison. Revisit once a clear winner emerges.
-      max_open_positions: 4
+      # Cut 4 -> 3 (2026-10-16): -$1193 across 31 trades in a week is too much
+      # simultaneous exposure for a $2200 account; fewer concurrent slots
+      # forces the scanner to be pickier about which signal actually gets a
+      # position instead of taking every strategy's candidate at once.
+      max_open_positions: 3
     contract_filters:
       min_delta: 0.20
       max_delta: 0.35
@@ -363,10 +367,16 @@ risk:
   max_trade_risk_pct: 0.30
   # Max simultaneous open positions (enforced in paper/live phases).
   max_open_positions: 3
-  # Max new trades logged per calendar week. Raised 6 -> 12 (2026-10-01): with
-  # 7 strategies now active (was 4), 6/week split too thin to accumulate a
-  # usable comparison sample per strategy in reasonable time.
-  max_trades_per_week: 12
+  # Max new trades logged per calendar week, per strategy (see
+  # storage.trades_in_current_week -- deliberately scoped per-strategy so a
+  # fast-cadence strategy can't exhaust a shared limit and starve the others).
+  # Raised 6 -> 12 (2026-10-01): with 7 strategies now active (was 4), 6/week
+  # split too thin to accumulate a usable comparison sample per strategy.
+  # Cut 12 -> 8 (2026-10-16): with 7 strategies each capable of 8/week, the
+  # aggregate ceiling is still high, but combined with the tighter signal
+  # gates above and max_open_positions: 3, this meaningfully throttles the
+  # account after a -$1193/week, 31-trade drawdown.
+  max_trades_per_week: 8
 
 contract_filters:
   # Weekly / short-dated horizon for a small-account challenge.
@@ -391,19 +401,22 @@ signal:
   # Tighter RSI band (was 45): a call now needs RSI >= 50, i.e. real strength
   # rather than a barely-positive drift. Puts still require RSI < this floor.
   rsi_min: 50
-  # Raised 70 -> 80 (2026-10-08): a strict 70 ceiling treated a sustained,
-  # low-volatility uptrend (RSI pinned in the 80s for a full week on SPY/QQQ)
-  # as permanently "overheated", locking out every momentum/intraday signal
-  # at once since none of them require a pullback first. 80 still blocks
-  # genuine blow-off extremes while allowing a strong persistent trend to
-  # keep registering as bullish.
-  rsi_max: 80
+  # Lowered 80 -> 75 (2026-10-16): the big-7 mega-caps spent last week
+  # topping out with RSI pinned in the high 70s/low 80s right before every
+  # one of default's 6 momentum CALLs reversed and stopped out (0% hit rate,
+  # -$736 in a week) -- 80 was letting in blow-off-top entries, not just a
+  # persistent healthy trend. 75 still allows a strong trend through while
+  # trimming the most overheated tail.
+  rsi_max: 75
   # Quality gates that make entries far pickier (both signals use these):
   #  - price must sit at least this fraction BEYOND the SMA, not just on the
   #    right side of it, so noise around the mean does not trigger a trade.
   #  - the SMA must be sloping the trade's way over slope_lookback bars, so we
   #    only buy calls in a rising trend and puts in a falling one.
-  trend_buffer_pct: 0.004   # 0.4% beyond the SMA
+  # Widened 0.4% -> 0.7% (2026-10-16): too many of last week's entries were
+  # only marginally extended from the SMA before reversing; requiring a
+  # bigger cushion filters out the weakest-confirmation setups.
+  trend_buffer_pct: 0.007   # 0.7% beyond the SMA
   slope_lookback: 3
   # Intraday-signal settings, used by the 'intraday_momentum' signal (0DTE).
   # Bars come from Tradier timesales at this interval; shorter SMA/RSI periods
@@ -436,8 +449,11 @@ signal:
   # band around the rolling 20-day high meant every slow grind to a new high
   # stayed "at resistance" indefinitely -- it was blocking routine
   # continuation, not just chases of an old ceiling.
+  # Widened 0.5% -> 0.75% (2026-10-16): the big-7 names have had much bigger
+  # daily ranges than SPY/QQQ during their recent run, so 0.5% was too tight
+  # a no-chase zone around their 20-day highs.
   sr_lookback: 20
-  sr_buffer_pct: 0.005
+  sr_buffer_pct: 0.0075
   # Short-term reversal guard: refuse a CALL when the raw daily closes have
   # fallen for this many straight bars (a fresh pullback), and refuse a PUT on
   # the mirror (a fresh bounce), even if RSI/SMA above still read bullish/
@@ -445,7 +461,18 @@ signal:
   # peak -- RSI(14)=57 and the 20-day SMA slope were both still "healthy"
   # because they're smoothed over a much stronger prior rally, so neither gate
   # saw the fresh reversal the raw closes already showed. 0 disables.
-  reversal_streak_days: 3
+  # Tightened 3 -> 2 (2026-10-16): trips a day sooner on a fresh rollover
+  # instead of waiting for a third confirming down/up bar.
+  reversal_streak_days: 2
+  # RSI extremes for the REVERSAL/FADE signals (intraday_reversal,
+  # daily_reversal) -- separate from rsi_min/rsi_max above, which are tuned
+  # for momentum continuation. Added 2026-10-16: weekly_reversion was reusing
+  # rsi_min=50 as its "oversold" bounce trigger, which is only mild weakness,
+  # not a real capitulation extreme -- it went 0-for-3 (-$461) buying dip
+  # calls on names that kept falling. 30/70 require an actual RSI extreme
+  # before fading.
+  reversal_rsi_min: 30
+  reversal_rsi_max: 70
 
 exits:
   # Paper-trade exit rules. Percentages are of the entry debit.

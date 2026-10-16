@@ -252,9 +252,9 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
 
     Fires the OPPOSITE direction of ``intraday_momentum``:
 
-    - RSI overbought (> rsi_max) + price extended above SMA → buy PUT
+    - RSI overbought (> reversal_rsi_max) + price extended above SMA → buy PUT
       (fade the high, expect snap-back to the mean)
-    - RSI oversold (< rsi_min) + price extended below SMA → buy CALL
+    - RSI oversold (< reversal_rsi_min) + price extended below SMA → buy CALL
       (bounce candidate)
 
     Requires the RSI to already be turning back off the extreme (vs. the
@@ -277,7 +277,7 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     price = bars[-1]
     upper = ma * (1 + s.trend_buffer_pct)
     lower = ma * (1 - s.trend_buffer_pct)
-    if price > upper and r > s.rsi_max:
+    if price > upper and r > s.reversal_rsi_max:
         if r >= r_prev:
             return Signal(
                 None,
@@ -287,10 +287,10 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.PUT,
             f"Reversal fade bearish: {price:.2f} > SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f} "
-            f"turning down from {r_prev:.1f}",
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > "
+            f"{s.reversal_rsi_max:.0f} turning down from {r_prev:.1f}",
         )
-    if price < lower and r < s.rsi_min:
+    if price < lower and r < s.reversal_rsi_min:
         if r <= r_prev:
             return Signal(
                 None,
@@ -300,8 +300,8 @@ def intraday_reversal_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.CALL,
             f"Reversal bounce bullish: {price:.2f} < SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f} "
-            f"turning up from {r_prev:.1f}",
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < "
+            f"{s.reversal_rsi_min:.0f} turning up from {r_prev:.1f}",
         )
     return Signal(
         None,
@@ -319,9 +319,9 @@ def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
     market; fading RSI extremes back toward the SMA is usually the better fit
     for that regime, at the cost of missing genuine breakouts.
 
-    - RSI overbought (> rsi_max) + price extended above SMA → buy PUT
+    - RSI overbought (> reversal_rsi_max) + price extended above SMA → buy PUT
       (fade the high, expect reversion toward the mean)
-    - RSI oversold (< rsi_min) + price extended below SMA → buy CALL
+    - RSI oversold (< reversal_rsi_min) + price extended below SMA → buy CALL
       (bounce candidate)
 
     Deliberately has no trend/slope gate (unlike ``momentum_signal``) since a
@@ -341,7 +341,7 @@ def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
 
     upper = ma * (1 + s.trend_buffer_pct)
     lower = ma * (1 - s.trend_buffer_pct)
-    if quote.last > upper and r > s.rsi_max:
+    if quote.last > upper and r > s.reversal_rsi_max:
         if r >= r_prev:
             return Signal(
                 None,
@@ -351,10 +351,10 @@ def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.PUT,
             f"Reversal fade bearish: last {quote.last:.2f} > SMA{s.sma_period} "
-            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > {s.rsi_max:.0f} "
-            f"turning down from {r_prev:.1f}",
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} > "
+            f"{s.reversal_rsi_max:.0f} turning down from {r_prev:.1f}",
         )
-    if quote.last < lower and r < s.rsi_min:
+    if quote.last < lower and r < s.reversal_rsi_min:
         if r <= r_prev:
             return Signal(
                 None,
@@ -364,8 +364,8 @@ def daily_reversal_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.CALL,
             f"Reversal bounce bullish: last {quote.last:.2f} < SMA{s.sma_period} "
-            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f} "
-            f"turning up from {r_prev:.1f}",
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < "
+            f"{s.reversal_rsi_min:.0f} turning up from {r_prev:.1f}",
         )
     return Signal(
         None,
