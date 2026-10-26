@@ -26,6 +26,8 @@ class RiskConfig:
     max_trade_risk_pct: float
     max_open_positions: int
     max_trades_per_week: int
+    # Account-wide new entries per day across ALL strategies (0 = unlimited).
+    max_trades_per_day: int = 0
 
 
 @dataclass(frozen=True)
@@ -531,6 +533,7 @@ def load_config(
         max_trade_risk_pct=float(risk.get("max_trade_risk_pct", 0.05)),
         max_open_positions=int(risk.get("max_open_positions", 1)),
         max_trades_per_week=int(risk.get("max_trades_per_week", 2)),
+        max_trades_per_day=int(risk.get("max_trades_per_day", 0)),
     )
     if not 0 < risk_cfg.max_trade_risk_pct <= 1:
         raise ValueError("risk.max_trade_risk_pct must be between 0 and 1")

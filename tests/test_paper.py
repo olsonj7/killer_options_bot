@@ -84,6 +84,45 @@ def test_max_open_positions_enforced(tmp_path):
     assert engine.open_from_candidate(make_candidate(as_of)) is None
 
 
+def test_account_daily_trade_cap_enforced(tmp_path):
+    from killer_options_bot.config import RiskConfig
+
+    config = make_config(
+        tmp_path,
+        account_value=100000.0,
+        risk=RiskConfig(
+            max_trade_risk_pct=0.9,
+            max_open_positions=5,
+            max_trades_per_week=50,
+            max_trades_per_day=1,
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of), storage, as_of=as_of)
+    first = make_candidate(as_of)
+    assert engine.open_from_candidate(first) is not None
+
+    second = make_candidate(as_of)
+    msft = OptionContract(
+        symbol="MSFT260315C00400000", underlying="MSFT", side=Side.CALL,
+        strike=400.0, expiration=as_of + timedelta(days=45), bid=1.00, ask=1.04,
+        last=1.02, delta=0.40, implied_volatility=0.30, volume=500,
+        open_interest=2000,
+    )
+    second = Candidate(
+        contract=msft, side=Side.CALL, signal_note="test",
+        decision=RiskDecision.accept(), max_loss=msft.cost,
+    )
+    assert engine.open_from_candidate(second) is None
+
+    next_day = PaperEngine(
+        config, MockMarketData(as_of=as_of + timedelta(days=1)), storage,
+        as_of=as_of + timedelta(days=1),
+    )
+    assert next_day.open_from_candidate(second) is not None
+
+
 def test_one_position_per_underlying(tmp_path):
     # Even with slots free, a second position on the SAME underlying under the
     # SAME strategy (different strike/side) must be blocked. This stops

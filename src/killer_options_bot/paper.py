@@ -140,6 +140,11 @@ class PaperEngine:
             self._note_blocked(candidate, "max open positions reached")
             return None
 
+        day_cap = self.config.risk.max_trades_per_day
+        if day_cap > 0 and self.storage.trades_today(self.as_of or date.today()) >= day_cap:
+            self._note_blocked(candidate, f"account daily limit ({day_cap}) reached")
+            return None
+
         # Per-strategy daily trade limit (0 = unlimited).
         strat_cfg = next(
             (s for s in self.config.active_strategies

@@ -39,9 +39,15 @@ account_tiers:
     # live data showed every "default"/zerodte trade resolving in 0-1 day
     # regardless of DTE, consistent with gamma/theta dominating short-dated
     # contracts before the multi-day thesis gets room to play out.
-    strategies: [default, zerodte, reversal_0dte, weekly_reversion, swing, leaps, fast_momentum]
+    # 2026-10-26: dropped fast_momentum (its one trade gapped overnight to -90%)
+    # and leaps (no trades; ties up capital on this account size).
+    strategies: [default, zerodte, reversal_0dte, weekly_reversion, swing]
     risk:
-      max_trade_risk_pct: 0.30
+      # Cut 0.30 -> 0.15 (2026-10-26): at 30%, sizing let one trade spend $660
+      # of premium, so a routine stop-out cost $250-400 and losses ran ~2x wins.
+      max_trade_risk_pct: 0.15
+      # Account-wide new entries per day, across all strategies.
+      max_trades_per_day: 2
       # Raised 2 -> 4 (2026-10-01): with 7 strategies now active, swing (up to
       # a 10-day hold) and leaps (up to 60 days) could otherwise tie up a slot
       # for weeks and starve the faster strategies of entries during the
@@ -287,6 +293,9 @@ strategies:
     signal: momentum
     # Multi-day horizon: a look every half hour is plenty for entries.
     scan_interval_minutes: 30
+    limits:
+      # Was unlimited: 8 entries in 7 sessions, incl. two in the same minute.
+      max_trades_per_day: 1
     contract_filters:
       min_dte: 7
       max_dte: 21
@@ -295,7 +304,9 @@ strategies:
       max_spread_pct: 0.12
     exits:
       profit_target_pct: 0.60
-      stop_loss_pct: 0.40
+      # Tightened 0.40 -> 0.30 (2026-10-26): winners exit ~+26-31% via the
+      # trail; 40% stops (filling -41% to -53%) made losers ~1.5x winners.
+      stop_loss_pct: 0.30
       max_holding_days: 10
       min_dte_exit: 2
       # Trend trade: let winners run. Once up +25% a trailing stop arms,
@@ -377,6 +388,8 @@ risk:
   # gates above and max_open_positions: 3, this meaningfully throttles the
   # account after a -$1193/week, 31-trade drawdown.
   max_trades_per_week: 8
+  # Account-wide new entries per day across all strategies (0 = unlimited).
+  max_trades_per_day: 2
 
 contract_filters:
   # Weekly / short-dated horizon for a small-account challenge.
