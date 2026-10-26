@@ -268,12 +268,10 @@ def test_scanner_survives_missing_bar_getters(tmp_path):
 def test_config_loads_strat_strategy():
     from killer_options_bot.config import load_config
 
-    # 'strat' is defined and valid but intentionally NOT active on the smallest
-    # tier (kept out of the active list to avoid adding entries). It must still
-    # parse as a recognized signal so it can be enabled later without error.
     cfg = load_config("config.yaml")
-    names = [s.name for s in cfg.active_strategies]
-    assert "strat" not in names  # inactive by design
+    strat = next(s for s in cfg.active_strategies if s.name == "strat")
+    assert strat.signal == "strat_breakout"
+    assert strat.max_trades_per_day == 1
     from killer_options_bot.config import _VALID_SIGNALS
     from killer_options_bot.scanner import _SIGNALS
 

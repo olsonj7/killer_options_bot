@@ -30,10 +30,6 @@ account_tiers:
     # 0DTE playbook on live Tradier data (PAPER ONLY - no real capital). 0DTE is
     # the highest-variance mode; keep it on paper until real results prove out.
     # SPY/QQQ have daily expirations, so 0DTE contracts are always available.
-    # NOTE: 'strat' (STRAT breakout) is implemented and tested but intentionally
-    # NOT active yet — adding a third entry source works against the current
-    # goal of FEWER, higher-quality trades. Enable it once default/zerodte prove
-    # out with the new pickiness gates.
     # swing/leaps/fast_momentum added 2026-10-01 (still paper-only) to forward-
     # test longer-DTE, less theta-sensitive variants of the momentum thesis --
     # live data showed every "default"/zerodte trade resolving in 0-1 day
@@ -41,7 +37,10 @@ account_tiers:
     # contracts before the multi-day thesis gets room to play out.
     # 2026-10-26: dropped fast_momentum (its one trade gapped overnight to -90%)
     # and leaps (no trades; ties up capital on this account size).
-    strategies: [default, zerodte, reversal_0dte, weekly_reversion, swing]
+    # Also 2026-10-26: swapped weekly_reversion/reversal_0dte (buy RSI 30/70
+    # extremes -- the textbook way RSI fails in a trend) for 'strat', the
+    # price-action breakout (no RSI), as the primary intraday entry.
+    strategies: [default, zerodte, swing, strat]
     risk:
       # Cut 0.30 -> 0.15 (2026-10-26): at 30%, sizing let one trade spend $660
       # of premium, so a routine stop-out cost $250-400 and losses ran ~2x wins.
@@ -268,6 +267,12 @@ strategies:
     signal: strat_breakout
     # Intraday breakout: re-check for a fresh trigger every few minutes.
     scan_interval_minutes: 5
+    # Same-day cadence as zerodte: never hold opposite sides on one name.
+    conflict_group: zerodte_intraday
+    limits:
+      max_trades_per_day: 1
+      # Midday displacement bars are rare and the breaks that do print fail more.
+      skip_midday: true
     contract_filters:
       # Short-dated so a same-session directional move pays; 0-2 DTE.
       min_dte: 0
@@ -279,7 +284,8 @@ strategies:
     exits:
       # Directional day trade: take a solid move, cut a failed break quickly.
       profit_target_pct: 0.50
-      stop_loss_pct: 0.40
+      # A failed break is wrong fast; keep the loss under the +30% first trim.
+      stop_loss_pct: 0.25
       # Day-trade horizon: exit same day, carry to next session at most.
       max_holding_days: 1
       min_dte_exit: 0
