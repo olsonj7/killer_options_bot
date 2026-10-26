@@ -19,6 +19,9 @@ class ContractFilters:
     max_spread_pct: float
     min_volume: int
     min_open_interest: int
+    # Reject when contract IV exceeds this multiple of the underlying's 20-day
+    # realized vol (premium already rich -> IV-crush risk). 0 disables.
+    max_iv_hv_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,9 @@ class SignalConfig:
     # on any mild dip below RSI 50, not a genuine capitulation extreme.
     reversal_rsi_min: float = 30.0
     reversal_rsi_max: float = 70.0
+    # Momentum signals: when True, RSI only vetoes blown-out readings (calls
+    # above rsi_max, puts below 100 - rsi_max) instead of requiring a band.
+    rsi_sanity_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -364,6 +370,7 @@ def _build_filters(d: dict) -> ContractFilters:
         max_spread_pct=float(d.get("max_spread_pct", 0.12)),
         min_volume=int(d.get("min_volume", 100)),
         min_open_interest=int(d.get("min_open_interest", 500)),
+        max_iv_hv_ratio=float(d.get("max_iv_hv_ratio", 0.0)),
     )
     if cfg.min_dte > cfg.max_dte:
         raise ValueError("min_dte must be <= max_dte")
@@ -562,6 +569,7 @@ def load_config(
         reversal_streak_days=int(signal.get("reversal_streak_days", 0)),
         reversal_rsi_min=float(signal.get("reversal_rsi_min", 30.0)),
         reversal_rsi_max=float(signal.get("reversal_rsi_max", 70.0)),
+        rsi_sanity_only=bool(signal.get("rsi_sanity_only", False)),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(

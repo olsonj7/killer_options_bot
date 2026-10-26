@@ -130,6 +130,8 @@ strategies:
       min_delta: 0.35
       max_delta: 0.55
       max_spread_pct: 0.18
+      # 0-1 DTE quoted IV isn't comparable to 20-day realized vol.
+      max_iv_hv_ratio: 0
     exits:
       # Long-premium 0DTE is structurally LOW win rate (~35-45%): theta bleeds
       # every minute and you need a fast directional move. The edge, if any,
@@ -281,6 +283,8 @@ strategies:
       min_delta: 0.40
       max_delta: 0.60
       max_spread_pct: 0.18
+      # 0-2 DTE quoted IV isn't comparable to 20-day realized vol.
+      max_iv_hv_ratio: 0
     exits:
       # Directional day trade: take a solid move, cut a failed break quickly.
       profit_target_pct: 0.50
@@ -412,6 +416,9 @@ contract_filters:
   max_spread_pct: 0.12
   min_volume: 100
   min_open_interest: 500
+  # Skip contracts whose IV is > 1.5x the stock's 20-day realized vol: the
+  # premium already prices a big move, so IV crush can eat a correct call.
+  max_iv_hv_ratio: 1.5
 
 signal:
   # Simple momentum gate. A call needs price above SMA and RSI in band.
@@ -427,6 +434,10 @@ signal:
   # persistent healthy trend. 75 still allows a strong trend through while
   # trimming the most overheated tail.
   rsi_max: 75
+  # 2026-10-26: price structure (SMA trend/slope, weekly trend, S/R) decides
+  # momentum entries; RSI only vetoes blown-out readings (call > rsi_max,
+  # put < 100 - rsi_max). rsi_min is unused by momentum in this mode.
+  rsi_sanity_only: true
   # Quality gates that make entries far pickier (both signals use these):
   #  - price must sit at least this fraction BEYOND the SMA, not just on the
   #    right side of it, so noise around the mean does not trigger a trade.

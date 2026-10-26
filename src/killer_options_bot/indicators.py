@@ -5,6 +5,21 @@ Pure-Python, no numpy dependency, so the bot stays easy to install.
 
 from __future__ import annotations
 
+import math
+
+
+def realized_vol(closes: list[float], period: int = 20) -> float | None:
+    """Annualized close-to-close volatility over the last ``period`` returns."""
+    if period < 2 or len(closes) < period + 1:
+        return None
+    window = closes[-(period + 1):]
+    if any(c <= 0 for c in window):
+        return None
+    rets = [math.log(window[i] / window[i - 1]) for i in range(1, len(window))]
+    mean = sum(rets) / len(rets)
+    var = sum((x - mean) ** 2 for x in rets) / (len(rets) - 1)
+    return math.sqrt(var) * math.sqrt(252)
+
 
 def sma(values: list[float], period: int) -> float | None:
     """Simple moving average of the last ``period`` values."""

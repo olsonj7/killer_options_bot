@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config, StrategyConfig
-from killer_options_bot.indicators import rsi, sma
+from killer_options_bot.indicators import realized_vol, rsi, sma
 from killer_options_bot.models import Bar, Candidate, OptionContract, Quote, Side
 from killer_options_bot.risk import RiskEngine
 from killer_options_bot.storage import Storage
@@ -105,6 +105,12 @@ def _recent_reversal(closes: list[float], streak: int) -> str | None:
     return None
 
 
+def _rsi_allows(r: float, s, up: bool) -> bool:
+    if s.rsi_sanity_only:
+        return r <= s.rsi_max if up else r >= 100 - s.rsi_max
+    return s.rsi_min <= r <= s.rsi_max if up else r < s.rsi_min
+
+
 def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     """Very simple momentum gate.
 
@@ -141,7 +147,7 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     lower = ma * (1 - s.trend_buffer_pct)
     if (
         quote.last > upper
-        and s.rsi_min <= r <= s.rsi_max
+        and _rsi_allows(r, s, up=True)
         and _sma_slope_ok(quote.closes, s.sma_period, s.slope_lookback, up=True)
     ):
         if _weekly_trend(quote.closes, s.weekly_bar_days, s.weekly_sma_period) == "down":
@@ -168,7 +174,7 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         )
     if (
         quote.last < lower
-        and r < s.rsi_min
+        and _rsi_allows(r, s, up=False)
         and _sma_slope_ok(quote.closes, s.sma_period, s.slope_lookback, up=False)
     ):
         if _weekly_trend(quote.closes, s.weekly_bar_days, s.weekly_sma_period) == "up":
@@ -221,7 +227,7 @@ def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
     lower = ma * (1 - s.trend_buffer_pct)
     if (
         price > upper
-        and s.rsi_min <= r <= s.rsi_max
+        and _rsi_allows(r, s, up=True)
         and _sma_slope_ok(bars, s.intraday_sma_period, s.slope_lookback, up=True)
     ):
         return Signal(
@@ -232,7 +238,7 @@ def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
         )
     if (
         price < lower
-        and r < s.rsi_min
+        and _rsi_allows(r, s, up=False)
         and _sma_slope_ok(bars, s.intraday_sma_period, s.slope_lookback, up=False)
     ):
         return Signal(
@@ -478,7 +484,8 @@ def strat_breakout_signal(quote: Quote, cfg: Config) -> Signal:
 
 
 def _best_contract(
-    contracts: list[OptionContract], cfg: Config, as_of: date
+    contracts: list[OptionContract], cfg: Config, as_of: date,
+    hv: float | None = None,
 ) -> OptionContract | None:
     """Pick the in-band contract whose delta is closest to the band midpoint.
 
@@ -492,6 +499,13 @@ def _best_contract(
     f = cfg.filters
     max_trade_risk = cfg.account_value * cfg.risk.max_trade_risk_pct
     affordable = [c for c in contracts if c.cost <= max_trade_risk]
+    if f.max_iv_hv_ratio > 0 and hv:
+        # Contracts with no IV reading (0) are kept rather than guessed at.
+        affordable = [
+            c for c in affordable
+            if c.implied_volatility <= 0
+            or c.implied_volatility <= f.max_iv_hv_ratio * hv
+        ]
     target_delta = (f.min_delta + f.max_delta) / 2
     in_band = [
         c
@@ -613,7 +627,9 @@ class Scanner:
                 return None
 
         chain = self.data.get_option_chain(symbol, signal.side)
-        contract = _best_contract(chain, scfg, self.as_of)
+        contract = _best_contract(
+            chain, scfg, self.as_of, hv=realized_vol(quote.closes, 20)
+        )
         if contract is None:
             return None
 
