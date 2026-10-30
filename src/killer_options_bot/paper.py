@@ -227,7 +227,11 @@ class PaperEngine:
         elif pl_pct >= e.profit_target_pct:
             return f"profit target hit (+{pl_pct:.0%})"
 
-        if pl_pct <= -e.stop_loss_pct:
+        # Stop at breakeven once a trim has banked profit: a winner never turns into a loss.
+        if position.trims_done > 0:
+            if option_price <= position.entry_price:
+                return f"breakeven stop hit after trim ({pl_pct:+.0%})"
+        elif pl_pct <= -e.stop_loss_pct:
             return f"stop loss hit ({pl_pct:.0%})"
 
         # Same-day strategies (max_holding_days=0) must never carry overnight:

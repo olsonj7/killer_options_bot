@@ -98,6 +98,32 @@ def _trim_exits(trims: tuple[TrimRule, ...]) -> ExitConfig:
     )
 
 
+def test_stop_moves_to_breakeven_after_trim(tmp_path):
+    config = make_config(tmp_path, exits=_trim_exits((TrimRule(0.25, 0.5),)))
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    pos = _open_position(storage, as_of, entry=1.00, qty=4)
+    data = StubData(as_of, mid=0.95)
+    engine = PaperEngine(config, data, storage, as_of=as_of)
+
+    # Before any trim, -5% is well inside the 30% stop: hold.
+    assert not engine.manage_position(pos).closed
+
+    data.set_mid(1.30)
+    assert engine.manage_position(pos).trimmed == 2
+
+    # Runner back above entry: still held.
+    data.set_mid(1.05)
+    assert not engine.manage_position(pos).closed
+
+    data.set_mid(1.00)
+    result = engine.manage_position(pos)
+    assert result.closed
+    assert "breakeven stop" in result.reason
+    # Trim banked +$60 on 2 contracts, so the trade as a whole is a winner.
+    assert pos.realized_pl_banked == pytest.approx(60.0)
+
+
 # --- Position sizing -------------------------------------------------------
 
 
