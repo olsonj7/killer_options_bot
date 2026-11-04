@@ -479,10 +479,12 @@ def load_config(
         raw = yaml.safe_load(fh) or {}
 
     # Layer any DB-persisted overrides on top of the YAML baseline.
+    db_sections: dict[str, dict] = {}
     if overrides:
         for (section, key), value_str in overrides.items():
             try:
                 raw.setdefault(section, {})[key] = float(value_str)
+                db_sections.setdefault(section, {})[key] = float(value_str)
             except (ValueError, TypeError):
                 pass
 
@@ -519,6 +521,10 @@ def load_config(
         risk = _overlay(risk, tier.get("risk", {}))
         filters = _overlay(filters, tier.get("contract_filters", {}))
         exits = _overlay(exits, tier.get("exits", {}))
+        # Values saved via /config must beat the tier's YAML defaults.
+        risk = _overlay(risk, db_sections.get("risk", {}))
+        filters = _overlay(filters, db_sections.get("contract_filters", {}))
+        exits = _overlay(exits, db_sections.get("exits", {}))
 
     trading_mode = str(mode.get("trading_mode", "scan")).lower()
     if trading_mode not in {"scan", "paper", "live"}:

@@ -70,6 +70,19 @@ def test_select_tier_picks_greatest_min_value_at_or_below():
     assert _select_tier(_TIERS, 1_000_000)["min_value"] == 25000
 
 
+def test_saved_overrides_beat_tier_values(tmp_path):
+    path = _write_config(tmp_path, 1000.0, tiers=_TIERS)
+    assert load_config(path).risk.max_open_positions == 2  # tier value
+
+    cfg = load_config(path, {
+        ("risk", "max_open_positions"): "4",
+        ("contract_filters", "max_delta"): "0.40",
+    })
+    assert cfg.risk.max_open_positions == 4
+    assert cfg.filters.max_delta == 0.40
+    assert cfg.risk.max_trade_risk_pct == 0.30  # no override -> tier still applies
+
+
 def test_select_tier_empty_when_none_defined():
     assert _select_tier([], 1000) == {}
 
