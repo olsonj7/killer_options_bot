@@ -10,6 +10,43 @@ from killer_options_bot.models import PaperPosition, PositionStatus, Side
 from datetime import date
 
 
+def test_closed_trade_pct_is_whole_trade_return():
+    from killer_options_bot.web import _render_closed_trades
+
+    # The 11/03 NVDA put: 3 @ $1.19, trimmed 2, runner out at $1.15.
+    p = PaperPosition(
+        option_symbol="NVDA261109P00195000", underlying="NVDA", side=Side.PUT,
+        strike=195.0, expiration=date(2026, 11, 9), quantity=1,
+        entry_price=1.19, entry_date=date(2026, 11, 3),
+        status=PositionStatus.CLOSED, original_quantity=3,
+        realized_pl_banked=146.10, trims_done=1,
+        exit_price=1.15, exit_date=date(2026, 11, 4),
+    )
+    assert "$142.10 (+40%)" in _render_closed_trades([p])
+
+
+def test_equity_range_today_and_week():
+    from datetime import datetime, timedelta
+
+    from killer_options_bot.market import EASTERN
+    from killer_options_bot.web import _trades_in_range
+
+    today = datetime.now(EASTERN).date()
+
+    def closed_on(d):
+        return PaperPosition(
+            option_symbol="X", underlying="SPY", side=Side.CALL, strike=1.0,
+            expiration=d, quantity=1, entry_price=1.0, entry_date=d,
+            status=PositionStatus.CLOSED, exit_price=1.1, exit_date=d,
+        )
+
+    trades = [closed_on(today), closed_on(today - timedelta(days=3)),
+              closed_on(today - timedelta(days=20))]
+    assert len(_trades_in_range(trades, "0")) == 1
+    assert len(_trades_in_range(trades, "7")) == 2
+    assert len(_trades_in_range(trades, "30")) == 3
+
+
 def _write_config(tmp_path, account_value=25000.0):
     db_path = tmp_path / "web.db"
     cfg = {

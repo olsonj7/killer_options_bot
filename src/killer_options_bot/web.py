@@ -387,6 +387,8 @@ def _fmt_scan_time(raw: str | None) -> str:
     return dt.astimezone(EASTERN).strftime("%m-%d %H:%M ET")
 
 _RANGE_OPTIONS: list[tuple[str, str]] = [
+    ("0", "Today"),
+    ("7", "1W"),
     ("30", "30D"),
     ("90", "90D"),
     ("365", "1Y"),
@@ -819,9 +821,8 @@ def _render_closed_trades(closed: list[PaperPosition], limit: int = 25) -> str:
         for p in reversed(closed[-limit:]):
             pl = p.realized_pl() or 0.0
             cls = "pos" if pl >= 0 else "neg"
-            pct = 0.0
-            if p.exit_price is not None and p.entry_price > 0:
-                pct = (p.exit_price - p.entry_price) / p.entry_price
+            # Whole-trade return (trims + runner) on the full original debit.
+            pct = pl / p.initial_cost if p.initial_cost > 0 else 0.0
             reason = html.escape(p.exit_reason or "")
             rows.append(
                 f"<tr><td>{html.escape(p.underlying)}</td>"
