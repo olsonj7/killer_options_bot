@@ -78,6 +78,7 @@ EDITABLE_FIELDS: list[tuple[str, str, str, str, float, float]] = [
     ("risk", "max_trade_risk_pct", "Max risk / trade (fraction)", "float", 0.001, 1.0),
     ("risk", "max_open_positions", "Max open positions", "int", 1, 50),
     ("risk", "max_trades_per_week", "Max trades / week", "int", 1, 100),
+    ("risk", "max_trades_per_day", "Max trades / day, all strategies (0 = unlimited)", "int", 0, 50),
     ("contract_filters", "min_dte", "Min DTE", "int", 0, 365),
     ("contract_filters", "max_dte", "Max DTE", "int", 1, 730),
     ("contract_filters", "min_delta", "Min delta", "float", 0.0, 1.0),
@@ -333,6 +334,7 @@ class Dashboard:
             "max_trade_risk_pct": config.risk.max_trade_risk_pct,
             "max_open_positions": config.risk.max_open_positions,
             "max_trades_per_week": config.risk.max_trades_per_week,
+            "max_trades_per_day": config.risk.max_trades_per_day,
         })
         raw.setdefault("contract_filters", {}).update({
             "min_dte": config.filters.min_dte,
@@ -1044,6 +1046,7 @@ def _render_page(
         cand_rows.append(
             f"<tr><td class='reasons'>{_fmt_scan_time(r.get('created_at'))}</td>"
             f"<td class='{vcls}'>{verdict}</td>"
+            f"<td>{html.escape(_display_strategy_name(r.get('strategy') or 'default'))}</td>"
             f"<td>{html.escape(r['underlying'])}</td>"
             f"<td>{html.escape(r['side'].upper())}</td>"
             f"<td>{r['strike']:g}</td>"
@@ -1062,7 +1065,7 @@ def _render_page(
     )
     cand_body = (
         "".join(cand_rows)
-        or "<tr><td colspan='9' class='muted'>No candidates logged yet.</td></tr>"
+        or "<tr><td colspan='10' class='muted'>No candidates logged yet.</td></tr>"
     )
     max_risk = config.account_value * config.risk.max_trade_risk_pct
     equity_svg = _equity_curve_svg(_trades_in_range(closed, range_key), unrealized=unrealized)
@@ -1250,7 +1253,7 @@ def _render_page(
 
   <h2 style="font-size:15px;">Recent candidates</h2>
   <div class="table-wrap"><table>
-    <tr><th>Scanned</th><th>Verdict</th><th>Underlying</th><th>Side</th><th>Strike</th>
+    <tr><th>Scanned</th><th>Verdict</th><th>Strategy</th><th>Underlying</th><th>Side</th><th>Strike</th>
         <th>DTE</th><th>Mid</th><th>Cost</th><th>Reasons</th></tr>
     {cand_body}
   </table></div>

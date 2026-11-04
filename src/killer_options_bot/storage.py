@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     max_loss {d.real} NOT NULL,
     allowed INTEGER NOT NULL,
     reasons TEXT NOT NULL,
-    signal_note TEXT NOT NULL
+    signal_note TEXT NOT NULL,
+    strategy TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -241,6 +242,13 @@ class BaseStorage:
         if cols and "exit_time" not in cols:
             with self._connect() as conn:
                 conn.execute("ALTER TABLE positions ADD COLUMN exit_time TEXT")
+        cand_cols = self._existing_columns("candidates")
+        if cand_cols and "strategy" not in cand_cols:
+            with self._connect() as conn:
+                conn.execute(
+                    "ALTER TABLE candidates ADD COLUMN strategy TEXT "
+                    "NOT NULL DEFAULT 'default'"
+                )
 
     # --- Runtime state (cross-process key/value) ---------------------------
 
@@ -412,8 +420,8 @@ class BaseStorage:
                 created_at, underlying, option_symbol, side, strike,
                 expiration, dte, mid, spread_pct, delta, implied_volatility,
                 volume, open_interest, cost, max_loss, allowed, reasons,
-                signal_note
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                signal_note, strategy
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 candidate.created_at.isoformat(),
@@ -434,6 +442,7 @@ class BaseStorage:
                 1 if candidate.decision.allowed else 0,
                 "; ".join(candidate.decision.reasons),
                 candidate.signal_note,
+                candidate.strategy or "default",
             ),
         )
 

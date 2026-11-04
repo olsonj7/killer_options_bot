@@ -267,6 +267,25 @@ def test_dashboard_candidate_three_state_verdict(tmp_path):
     assert "Scanned" in html  # scan-time column header
 
 
+def test_candidate_records_and_shows_strategy(tmp_path):
+    from dataclasses import replace
+
+    from killer_options_bot.models import RiskDecision
+    from killer_options_bot.web import _display_strategy_name
+
+    config_path = _write_config(tmp_path)
+    storage = Storage(str(tmp_path / "web.db"))
+    cand = replace(
+        _candidate("SPY260116C00755000", 755.0, RiskDecision.accept()),
+        strategy="zerodte",
+    )
+    storage.record_candidate(cand)
+
+    assert storage.recent_candidates(1)[0]["strategy"] == "zerodte"
+    html = Dashboard(config_path, source="mock").render()
+    assert f"<td>{_display_strategy_name('zerodte')}</td>" in html
+
+
 def test_config_page_renders_current_values(tmp_path):
     config_path = _write_config(tmp_path, account_value=12345.0)
     dash = Dashboard(config_path, source="mock")
