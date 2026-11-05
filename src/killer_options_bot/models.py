@@ -27,6 +27,13 @@ class Bar:
     high: float
     low: float
     close: float
+    volume: float = 0.0
+    # Bar start as provided by the data source (e.g. "2026-11-05T09:45:00"); "" if unknown.
+    time: str = ""
+
+    @property
+    def session_date(self) -> str:
+        return self.time[:10]
 
     @property
     def range(self) -> float:

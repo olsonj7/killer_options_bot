@@ -63,6 +63,10 @@ class SignalConfig:
     strat_interval: str = "15min"
     strat_displacement_mult: float = 1.5
     strat_atr_period: int = 10
+    # strat_combo confirmation: setup-bar volume vs. recent average, and the
+    # minimum room (in average bar ranges) to the prior-day high/low.
+    strat_volume_mult: float = 1.2
+    strat_min_room_ranges: float = 1.0
     # Higher-timeframe trend alignment (used by 'momentum'/'daily_reversal').
     # If > 0, daily closes are bucketed into ``weekly_bar_days``-day groups to
     # build a synthetic weekly series; a CALL is refused while that weekly
@@ -452,7 +456,7 @@ def _build_exits(d: dict) -> ExitConfig:
     return cfg
 
 
-_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout", "intraday_reversal", "daily_reversal"}
+_VALID_SIGNALS = {"momentum", "intraday_momentum", "strat_breakout", "strat_combo", "intraday_reversal", "daily_reversal"}
 
 
 
@@ -568,6 +572,8 @@ def load_config(
             signal.get("strat_displacement_mult", 1.5)
         ),
         strat_atr_period=int(signal.get("strat_atr_period", 10)),
+        strat_volume_mult=float(signal.get("strat_volume_mult", 1.2)),
+        strat_min_room_ranges=float(signal.get("strat_min_room_ranges", 1.0)),
         weekly_bar_days=int(signal.get("weekly_bar_days", 0)),
         weekly_sma_period=int(signal.get("weekly_sma_period", 8)),
         sr_lookback=int(signal.get("sr_lookback", 0)),

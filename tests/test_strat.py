@@ -270,7 +270,7 @@ def test_config_loads_strat_strategy():
 
     cfg = load_config("config.yaml")
     strat = next(s for s in cfg.active_strategies if s.name == "strat")
-    assert strat.signal == "strat_breakout"
+    assert strat.signal == "strat_combo"
     assert strat.max_trades_per_day == 1
     from killer_options_bot.config import _VALID_SIGNALS
     from killer_options_bot.scanner import _SIGNALS

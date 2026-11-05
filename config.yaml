@@ -262,11 +262,11 @@ strategies:
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
   strat:
-    # Price-action day trade distilled from TheSTRAT / smart-money course:
-    # enter on a directional STRAT "2" bar (breaks the prior bar's high/low)
-    # that shows displacement (an impulse-sized range) and aligns with the
-    # prior-day high/low bias. Uses the 'strat_breakout' signal on OHLC bars.
-    signal: strat_breakout
+    # TheSTRAT 2-1-2 / 3-1-2 combos on 15min bars (2026-11-05, was the single
+    # displaced-2-bar 'strat_breakout'): a 2 or 3 setup bar, an inside bar,
+    # then a break of the inside bar's high (call) or low (put). Confirmed by
+    # setup-bar volume and room to the prior-day high/low.
+    signal: strat_combo
     # Intraday breakout: re-check for a fresh trigger every few minutes.
     scan_interval_minutes: 5
     # Same-day cadence as zerodte: never hold opposite sides on one name.
@@ -463,6 +463,11 @@ signal:
   strat_interval: 15min      # one of: 1min, 5min, 15min
   strat_displacement_mult: 1.5
   strat_atr_period: 10
+  # strat_combo confirmation: setup bar volume >= this x the prior
+  # strat_atr_period bars' average, and at least this many average bar ranges
+  # of room to the prior-day high (calls) / low (puts) if not already through.
+  strat_volume_mult: 1.2
+  strat_min_room_ranges: 1.0
   # Higher-timeframe trend alignment, used by the daily 'momentum' /
   # 'daily_reversal' signals ("default" and "weekly_reversion"). Daily closes
   # are bucketed into weekly_bar_days-day groups to build a synthetic weekly

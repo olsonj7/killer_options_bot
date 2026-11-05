@@ -147,25 +147,28 @@ class TradierMarketData:
     def get_intraday_bars(
         self, symbol: str, interval: str = "15min"
     ) -> list[Bar]:
-        """Intraday OHLC bars for today's session, oldest first.
+        """Intraday OHLC bars from the previous session's open to now, oldest first.
 
         Same Tradier ``/markets/timesales`` source as ``get_intraday_closes``
-        but keeps each bar's full open/high/low/close so price-action signals
-        (STRAT bar typing, displacement) have real ranges to work with. Returns
-        an empty list before the open or if the series is unavailable.
+        but keeps each bar's full OHLC, volume and start time. The prior
+        session is included so range/volume baselines exist from the first
+        bars of today. Returns an empty list before today's open.
         """
-        from killer_options_bot.market import EASTERN
+        from killer_options_bot.market import EASTERN, is_trading_day
 
         now = datetime.now(EASTERN)
-        start = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        if now < start:
+        today_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        if now < today_open:
             return []
+        prev = today_open - timedelta(days=1)
+        while not is_trading_day(prev.date()):
+            prev -= timedelta(days=1)
         data = self._get(
             "/markets/timesales",
             {
                 "symbol": symbol,
                 "interval": interval,
-                "start": start.strftime("%Y-%m-%d %H:%M"),
+                "start": prev.strftime("%Y-%m-%d %H:%M"),
                 "end": now.strftime("%Y-%m-%d %H:%M"),
                 "session_filter": "open",
             },
@@ -218,6 +221,8 @@ class TradierMarketData:
                         high=float(h),
                         low=float(low),
                         close=float(c),
+                        volume=float(n.get("volume") or 0),
+                        time=str(n.get("time") or n.get("date") or ""),
                     )
                 )
             except (TypeError, ValueError, AttributeError):

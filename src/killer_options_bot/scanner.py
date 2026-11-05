@@ -407,6 +407,100 @@ def _avg_range(bars: list[Bar], period: int) -> float | None:
     return sum(b.range for b in window) / period
 
 
+def _prior_day_bar(quote: Quote) -> Bar | None:
+    """Most recent daily bar from a session before today's intraday bars."""
+    today = quote.bars[-1].session_date if quote.bars else ""
+    for bar in reversed(quote.daily_bars):
+        if not today or not bar.session_date or bar.session_date < today:
+            return bar
+    return None
+
+
+def strat_combo_signal(quote: Quote, cfg: Config) -> Signal:
+    """TheSTRAT 2-1-2 / 3-1-2 combos, confirmed by volume and room to S/R.
+
+    bars[-3] is the setup (a 2 or 3 vs. bars[-4]), bars[-2] the inside bar,
+    and bars[-1] the trigger: breaking the inside bar's high buys a call, its
+    low a put, and price must still be through that level. Continuations and
+    reversals both count -- the trigger's break sets the direction.
+
+    Confidence gates:
+    - Volume: the setup bar's volume >= ``strat_volume_mult`` x the average of
+      the ``strat_atr_period`` bars before it (skipped when the feed has no
+      volume).
+    - Room: at least ``strat_min_room_ranges`` average bar ranges between
+      price and the prior-day high (calls) / low (puts) when that level is
+      still ahead -- don't buy straight into support/resistance.
+    """
+    s = cfg.signal
+    bars = quote.bars
+    if len(bars) < max(4, s.strat_atr_period + 3):
+        return Signal(None, f"Insufficient STRAT bars ({len(bars)})")
+    trigger, inside, setup, before = bars[-1], bars[-2], bars[-3], bars[-4]
+
+    if trigger.session_date and (
+        inside.session_date != trigger.session_date
+        or setup.session_date != trigger.session_date
+    ):
+        return Signal(None, "No STRAT combo: setup spans the prior session")
+    if strat_bar_type(inside, setup) != "1":
+        return Signal(None, "No STRAT combo: no inside bar")
+    setup_type = strat_bar_type(setup, before)
+    if setup_type == "1":
+        return Signal(None, "No STRAT combo: setup bar is an inside bar")
+    pattern = "3-1-2" if setup_type == "3" else "2-1-2"
+
+    if trigger.high > inside.high and trigger.close > inside.high:
+        side, label = Side.CALL, "2up"
+    elif trigger.low < inside.low and trigger.close < inside.low:
+        side, label = Side.PUT, "2down"
+    else:
+        return Signal(None, f"{pattern} waiting: inside bar not broken")
+    name = f"{pattern} ({setup_type}-1-{label})"
+
+    prior_vols = [b.volume for b in bars[-3 - s.strat_atr_period:-3] if b.volume > 0]
+    if setup.volume > 0 and prior_vols:
+        avg_vol = sum(prior_vols) / len(prior_vols)
+        if setup.volume < s.strat_volume_mult * avg_vol:
+            return Signal(
+                None,
+                f"{name} rejected: setup volume {setup.volume:,.0f} < "
+                f"{s.strat_volume_mult:g}x avg {avg_vol:,.0f}",
+            )
+
+    price = trigger.close
+    avg_rng = _avg_range(bars[:-1], s.strat_atr_period) or 0.0
+    room_needed = s.strat_min_room_ranges * avg_rng
+    level_note = ""
+    prior_day = _prior_day_bar(quote)
+    if prior_day is not None:
+        if side is Side.CALL and price < prior_day.high:
+            room = prior_day.high - price
+            if room < room_needed:
+                return Signal(
+                    None,
+                    f"{name} rejected: only {room:.2f} below PDH "
+                    f"{prior_day.high:.2f} (need {room_needed:.2f})",
+                )
+        if side is Side.PUT and price > prior_day.low:
+            room = price - prior_day.low
+            if room < room_needed:
+                return Signal(
+                    None,
+                    f"{name} rejected: only {room:.2f} above PDL "
+                    f"{prior_day.low:.2f} (need {room_needed:.2f})",
+                )
+        level_note = f", PDH {prior_day.high:.2f} / PDL {prior_day.low:.2f}"
+
+    level = inside.high if side is Side.CALL else inside.low
+    return Signal(
+        side,
+        f"STRAT {name}: price {price:.2f} through inside-bar "
+        f"{'high' if side is Side.CALL else 'low'} {level:.2f}, setup volume "
+        f"{setup.volume:,.0f}{level_note}",
+    )
+
+
 def strat_breakout_signal(quote: Quote, cfg: Config) -> Signal:
     """TheSTRAT directional breakout, gated by displacement + prior-day bias.
 
@@ -453,7 +547,9 @@ def strat_breakout_signal(quote: Quote, cfg: Config) -> Signal:
     # session; without it we cannot establish bias, so decline.
     if not quote.daily_bars:
         return Signal(None, "No prior-day bar for PDH/PDL bias")
-    prior_day = quote.daily_bars[-1]
+    prior_day = _prior_day_bar(quote)
+    if prior_day is None:
+        return Signal(None, "No prior-day bar for PDH/PDL bias")
     mid = prior_day.midpoint
     price = trigger.close
 
@@ -525,6 +621,7 @@ _SIGNALS = {
     "momentum": momentum_signal,
     "intraday_momentum": intraday_momentum_signal,
     "strat_breakout": strat_breakout_signal,
+    "strat_combo": strat_combo_signal,
     "intraday_reversal": intraday_reversal_signal,
     "daily_reversal": daily_reversal_signal,
 }
@@ -533,7 +630,7 @@ _SIGNALS = {
 _INTRADAY_SIGNALS = {"intraday_momentum", "intraday_reversal"}
 
 #: Signals that need OHLC bars (intraday + prior-day) attached to the quote.
-_BAR_SIGNALS = {"strat_breakout"}
+_BAR_SIGNALS = {"strat_breakout", "strat_combo"}
 
 
 def _signal_for(strategy: StrategyConfig, quote: Quote, cfg: Config) -> Signal:
