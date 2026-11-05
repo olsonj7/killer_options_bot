@@ -26,6 +26,10 @@ MARKET_CLOSE = time(16, 0)
 #: the session; skipping it avoids getting chopped up on same-day expiries.
 OPENING_RANGE_MINUTES = 30
 
+#: No new 0DTE entries at/after this time: the remaining time value decays
+#: faster than an intraday move can pay.
+ZERO_DTE_ENTRY_CUTOFF = time(15, 0)
+
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     """Return the date of the ``n``-th ``weekday`` (Mon=0) in a month."""
@@ -181,3 +185,8 @@ def minutes_since_open(moment: datetime | None = None) -> float:
 def in_opening_range(moment: datetime | None = None) -> bool:
     """True during the first ``OPENING_RANGE_MINUTES`` of the regular session."""
     return 0.0 <= minutes_since_open(moment) < OPENING_RANGE_MINUTES
+
+
+def past_zero_dte_cutoff(moment: datetime | None = None) -> bool:
+    """True at/after ``ZERO_DTE_ENTRY_CUTOFF`` (Eastern)."""
+    return _as_eastern(moment or now_eastern()).time() >= ZERO_DTE_ENTRY_CUTOFF

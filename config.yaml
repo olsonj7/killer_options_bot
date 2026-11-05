@@ -276,8 +276,9 @@ strategies:
       # Midday displacement bars are rare and the breaks that do print fail more.
       skip_midday: true
     contract_filters:
-      # Short-dated so a same-session directional move pays; 0-2 DTE.
-      min_dte: 0
+      # Next-day or later (was 0-2): a 0DTE breakout entry late in the session
+      # lost -29% in 9 minutes to time decay on a ~0.1% bounce (11-05).
+      min_dte: 1
       max_dte: 2
       # Enough delta to actually move on an intraday break.
       min_delta: 0.40

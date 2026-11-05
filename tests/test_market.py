@@ -65,6 +65,14 @@ def test_in_opening_range_first_30_minutes():
     assert not market.in_opening_range(datetime(2026, 7, 8, 9, 20, tzinfo=ET))
 
 
+def test_zero_dte_cutoff_at_3pm():
+    assert not market.past_zero_dte_cutoff(datetime(2026, 7, 8, 14, 59, tzinfo=ET))
+    assert market.past_zero_dte_cutoff(datetime(2026, 7, 8, 15, 0, tzinfo=ET))
+    # 20:11 UTC == 15:11 ET (the 11-05 QQQ entry).
+    utc = ZoneInfo("UTC")
+    assert market.past_zero_dte_cutoff(datetime(2026, 11, 5, 20, 11, tzinfo=utc))
+
+
 def test_naive_datetime_treated_as_eastern():
     # A naive datetime should be interpreted as Eastern, not raise.
     assert market.is_market_open(datetime(2026, 7, 8, 10, 0))

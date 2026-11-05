@@ -888,6 +888,17 @@ def run_loop(
                                 "blocked: 0DTE opening-range guard (first 30 min)",
                             )
                         continue
+                    if (
+                        not ignore_market_hours
+                        and candidate.contract.dte(as_of) <= 0
+                        and market.past_zero_dte_cutoff()
+                    ):
+                        if candidate.id is not None:
+                            storage.mark_candidate_blocked(
+                                candidate.id,
+                                "blocked: no new 0DTE entries after 3:00 PM ET",
+                            )
+                        continue
                     position = engine.open_from_candidate(candidate)
                     if position is not None:
                         opened += 1
