@@ -229,6 +229,21 @@ class Dashboard:
             to_save.append((section, key, value))
 
         # Per-strategy fields: form key = "strategy.<name>.<section>.<key>"
+        default_limit = form.get("strategy.default.limits.max_trades_per_day")
+        if default_limit and default_limit[0].strip() != "":
+            _sec, _key, _lbl, _kind, _lo, _hi = STRATEGY_EDITABLE_FIELDS[0]
+            try:
+                dval = int(default_limit[0].strip())
+            except ValueError:
+                errors.append(f"Weekly Momentum {_lbl}: not a number")
+            else:
+                if not (_lo <= dval <= _hi):
+                    errors.append(
+                        f"Weekly Momentum {_lbl}: must be between {_lo:g} and {_hi:g}"
+                    )
+                else:
+                    raw.setdefault("strategies", {}).setdefault("default", {}).setdefault(_sec, {})[_key] = dval
+                    strat_to_save.append(("default", _sec, _key, dval))
         non_default = [s for s in base_config.active_strategies if s.name != "default"]
         for strat in non_default:
             for section, key, label, kind, lo, hi in STRATEGY_EDITABLE_FIELDS:
@@ -1389,6 +1404,13 @@ def _render_config_page(
                       for s, k, lbl, knd, lo, hi in EDITABLE_FIELDS
                       if s in ("contract_filters", "exits")]
     default_html = _config_fields_html(default_fields, _default_val)
+    # The default strategy's own per-day cap lives under strategies.default.limits
+    # (not the base sections above), so it gets the per-strategy field name.
+    default_html = _config_fields_html(
+        [STRATEGY_EDITABLE_FIELDS[0]],
+        lambda _s, _k: str(default_strat.max_trades_per_day if default_strat else 0),
+        "strategy.default.",
+    ) + default_html
 
     # --- Tabs: per non-default strategy --------------------------------------
     strat_tabs_nav = ""

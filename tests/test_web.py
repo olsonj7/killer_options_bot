@@ -332,6 +332,23 @@ def test_config_save_updates_and_validates(tmp_path):
     assert saved_yaml["account"]["value"] == 25000.0  # _write_config default
 
 
+def test_default_strategy_daily_limit_is_editable(tmp_path):
+    config_path = _write_config(tmp_path)
+    dash = Dashboard(config_path, source="mock")
+
+    page = dash.render_config()
+    assert "name='strategy.default.limits.max_trades_per_day'" in page
+
+    msg = dash.save_config({"strategy.default.limits.max_trades_per_day": ["3"]})
+    assert "saved" in msg.lower()
+    config, _storage, _data, _engine = dash._context()
+    default = next(s for s in config.active_strategies if s.name == "default")
+    assert default.max_trades_per_day == 3
+
+    msg = dash.save_config({"strategy.default.limits.max_trades_per_day": ["99"]})
+    assert "not saved" in msg.lower()
+
+
 def test_config_override_applied_to_running_config(tmp_path):
     # The override must be visible in _context() so the bot runs with the
     # new value without a redeploy.
