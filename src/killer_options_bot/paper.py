@@ -13,8 +13,10 @@ the rules in ``config.exits``:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
+from typing import Callable
 
+from killer_options_bot import market
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config
 from killer_options_bot.indicators import fib_extension_levels
@@ -75,11 +77,14 @@ class PaperEngine:
         storage: Storage,
         as_of: date | None = None,
         cost_model: CostModel | None = None,
+        now_fn: Callable[[], datetime] | None = None,
     ):
         self.config = config
         self.data = data
         self.storage = storage
         self.as_of = as_of or date.today()
+        # Wall clock (US Eastern) for same-day time stops; injectable for tests.
+        self._now = now_fn or market.now_eastern
         # When None, fills happen at the mid with no commission (the original
         # behaviour). A CostModel makes entries/exits fill at bid/ask + fees.
         self.cost_model = cost_model
@@ -186,14 +191,36 @@ class PaperEngine:
             status=PositionStatus.OPEN,
             strategy=candidate.strategy,
             original_quantity=quantity,
+            entry_underlying=candidate.underlying_price,
+            underlying_stop=candidate.stop_level,
         )
         self.storage.open_position(position)
         return position
 
     # --- Exit decision -----------------------------------------------------
 
+    def _minutes_in_trade(self, position: PaperPosition) -> float | None:
+        """Minutes since a SAME-DAY entry, else None (overnight/backtest)."""
+        if not position.entry_time:
+            return None
+        now = self._now()
+        if position.entry_date != now.date() or self.as_of != now.date():
+            return None
+        try:
+            hh, mm, *rest = (int(p) for p in position.entry_time.split(":"))
+        except ValueError:
+            return None
+        entry = now.replace(
+            hour=hh, minute=mm, second=rest[0] if rest else 0, microsecond=0
+        )
+        return (now - entry).total_seconds() / 60.0
+
     def exit_reason(
-        self, position: PaperPosition, option_price: float, eod: bool = False
+        self,
+        position: PaperPosition,
+        option_price: float,
+        eod: bool = False,
+        underlying_price: float | None = None,
     ) -> str | None:
         """Return an exit reason if any rule triggers, else None."""
         e = self._exits_for(position)
@@ -228,11 +255,53 @@ class PaperEngine:
             return f"profit target hit (+{pl_pct:.0%})"
 
         # Stop at breakeven once a trim has banked profit: a winner never turns into a loss.
-        if position.trims_done > 0:
-            if option_price <= position.entry_price:
-                return f"breakeven stop hit after trim (runner {pl_pct:+.0%})"
-        elif pl_pct <= -e.stop_loss_pct:
+        peak = position.high_water_mark or position.entry_price
+        peak_pl = (peak - position.entry_price) / position.entry_price
+        if position.trims_done > 0 and option_price <= position.entry_price:
+            return f"breakeven stop hit after trim (runner {pl_pct:+.0%})"
+
+        # Profit-locking floor: the higher the peak, the less of it we give back.
+        floor = max(
+            (r.floor_pct for r in e.ratchet if peak_pl >= r.peak_pct),
+            default=None,
+        )
+        if floor is not None and pl_pct <= floor:
+            return (
+                f"profit-lock stop hit ({pl_pct:+.0%}, peak +{peak_pl:.0%}, "
+                f"floor {floor:+.0%})"
+            )
+
+        # Structure stop: the chart level that proves the setup wrong. Pad it
+        # a few bps so a wick through the level does not trigger it.
+        if (
+            e.underlying_stop_enabled
+            and position.underlying_stop is not None
+            and underlying_price is not None
+        ):
+            lvl, buf = position.underlying_stop, e.underlying_stop_buffer_pct
+            broke = (
+                underlying_price <= lvl * (1 - buf)
+                if position.side is Side.CALL
+                else underlying_price >= lvl * (1 + buf)
+            )
+            if broke:
+                return (
+                    f"structure stop hit ({position.underlying} "
+                    f"{underlying_price:.2f} through {lvl:.2f}, {pl_pct:+.0%})"
+                )
+
+        # Premium stop (the hard backstop once a structure stop is in play).
+        if position.trims_done == 0 and pl_pct <= -e.stop_loss_pct:
             return f"stop loss hit ({pl_pct:.0%})"
+
+        # Stalled same-day trade: no follow-through and still red.
+        if e.time_stop_minutes > 0 and pl_pct < 0 and peak_pl < e.time_stop_min_peak_pct:
+            mins = self._minutes_in_trade(position)
+            if mins is not None and mins >= e.time_stop_minutes:
+                return (
+                    f"time stop ({mins:.0f} min, peak +{peak_pl:.0%}, "
+                    f"now {pl_pct:+.0%})"
+                )
 
         # Same-day strategies (max_holding_days=0) must never carry overnight:
         # the calendar check below only fires the NEXT morning, which let a
@@ -443,10 +512,22 @@ class PaperEngine:
         if contract.mid > prev_hwm:
             position.high_water_mark = contract.mid
             self.storage.update_high_water_mark(position.id, contract.mid)
+        prev_lwm = position.low_water_mark or position.entry_price
+        if contract.mid < prev_lwm:
+            position.low_water_mark = contract.mid
+            self.storage.update_low_water_mark(position.id, contract.mid)
+
+        # The underlying is only fetched when a structure stop needs it.
+        e = self._exits_for(position)
+        underlying_price = None
+        if e.underlying_stop_enabled and position.underlying_stop is not None:
+            underlying_price = self.data.get_quote(position.underlying).last
 
         # Exit rules trigger on the current market mid; the actual fill is at
         # the (worse) cost-adjusted exit price.
-        reason = self.exit_reason(position, contract.mid, eod=eod)
+        reason = self.exit_reason(
+            position, contract.mid, eod=eod, underlying_price=underlying_price
+        )
         if reason is not None:
             fill = self._exit_price(contract)
             self.storage.close_position(position.id, fill, self.as_of, reason)

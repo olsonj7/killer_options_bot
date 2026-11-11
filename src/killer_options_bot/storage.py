@@ -105,7 +105,10 @@ CREATE TABLE IF NOT EXISTS positions (
     exit_time TEXT,
     exit_price {d.real},
     exit_date TEXT,
-    exit_reason TEXT
+    exit_reason TEXT,
+    low_water_mark {d.real},
+    entry_underlying {d.real},
+    underlying_stop {d.real}
 );
 
 CREATE TABLE IF NOT EXISTS runtime_state (
@@ -138,6 +141,9 @@ CREATE TABLE IF NOT EXISTS positions_archive (
     exit_price {d.real},
     exit_date TEXT,
     exit_reason TEXT,
+    low_water_mark {d.real},
+    entry_underlying {d.real},
+    underlying_stop {d.real},
     archived_at TEXT NOT NULL,
     archive_reason TEXT
 );
@@ -243,6 +249,15 @@ class BaseStorage:
             with self._connect() as conn:
                 conn.execute("ALTER TABLE positions ADD COLUMN exit_time TEXT")
         cand_cols = self._existing_columns("candidates")
+        for table in ("positions", "positions_archive"):
+            tcols = self._existing_columns(table)
+            for col in ("low_water_mark", "entry_underlying", "underlying_stop"):
+                if tcols and col not in tcols:
+                    with self._connect() as conn:
+                        conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {col} "
+                            f"{self.dialect.real}"
+                        )
         if cand_cols and "strategy" not in cand_cols:
             with self._connect() as conn:
                 conn.execute(
@@ -558,6 +573,21 @@ class BaseStorage:
             ),
             entry_time=row.get("entry_time"),
             exit_time=row.get("exit_time"),
+            low_water_mark=(
+                float(row["low_water_mark"])
+                if row.get("low_water_mark") is not None
+                else None
+            ),
+            entry_underlying=(
+                float(row["entry_underlying"])
+                if row.get("entry_underlying") is not None
+                else None
+            ),
+            underlying_stop=(
+                float(row["underlying_stop"])
+                if row.get("underlying_stop") is not None
+                else None
+            ),
         )
 
     def open_position(
@@ -573,8 +603,9 @@ class BaseStorage:
                 quantity, entry_price, entry_date, status, mode,
                 broker_order_id, exit_price, exit_date, exit_reason, strategy,
                 original_quantity, realized_pl_banked, trims_done,
-                high_water_mark, entry_time
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                high_water_mark, entry_time, low_water_mark,
+                entry_underlying, underlying_stop
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 position.option_symbol,
@@ -597,6 +628,9 @@ class BaseStorage:
                 position.trims_done,
                 position.high_water_mark,
                 position.entry_time or _now_et_time(),
+                position.low_water_mark,
+                position.entry_underlying,
+                position.underlying_stop,
             ),
         )
         return position.id
@@ -624,6 +658,13 @@ class BaseStorage:
         """Record a new peak option mid for a position's trailing stop."""
         self._execute(
             "UPDATE positions SET high_water_mark = ? WHERE id = ?",
+            (value, position_id),
+        )
+
+    def update_low_water_mark(self, position_id: int, value: float) -> None:
+        """Record a new trough option mid (max adverse excursion)."""
+        self._execute(
+            "UPDATE positions SET low_water_mark = ? WHERE id = ?",
             (value, position_id),
         )
 
@@ -745,7 +786,8 @@ class BaseStorage:
         "option_symbol, underlying, side, strike, expiration, quantity, "
         "entry_price, entry_date, status, mode, strategy, original_quantity, "
         "realized_pl_banked, trims_done, high_water_mark, broker_order_id, "
-        "entry_time, exit_time, exit_price, exit_date, exit_reason"
+        "entry_time, exit_time, exit_price, exit_date, exit_reason, "
+        "low_water_mark, entry_underlying, underlying_stop"
     )
 
     def archive_and_clear_positions(self, reason: str | None = None) -> int:
@@ -777,7 +819,8 @@ class BaseStorage:
             "expiration, quantity, entry_price, entry_date, status, mode, "
             "strategy, original_quantity, realized_pl_banked, trims_done, "
             "high_water_mark, broker_order_id, entry_time, exit_time, "
-            "exit_price, exit_date, exit_reason FROM positions_archive "
+            "exit_price, exit_date, exit_reason, low_water_mark, "
+            "entry_underlying, underlying_stop FROM positions_archive "
             "ORDER BY id"
         )
         return [self._row_to_position(r) for r in rows]

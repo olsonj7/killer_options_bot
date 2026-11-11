@@ -9,7 +9,14 @@ from zoneinfo import ZoneInfo
 from killer_options_bot.brokers.base import MarketData
 from killer_options_bot.config import Config, StrategyConfig
 from killer_options_bot.indicators import realized_vol, rsi, sma
-from killer_options_bot.models import Bar, Candidate, OptionContract, Quote, Side
+from killer_options_bot.models import (
+    Bar,
+    Candidate,
+    OptionContract,
+    Quote,
+    RiskDecision,
+    Side,
+)
 from killer_options_bot.risk import RiskEngine
 from killer_options_bot.storage import Storage
 
@@ -18,6 +25,8 @@ from killer_options_bot.storage import Storage
 class Signal:
     side: Side | None
     note: str
+    #: Underlying price at which the setup is invalidated (None = no level).
+    stop_level: float | None = None
 
 
 def _sma_slope_ok(
@@ -407,6 +416,21 @@ def _avg_range(bars: list[Bar], period: int) -> float | None:
     return sum(b.range for b in window) / period
 
 
+def _combo_stop_level(
+    side: Side, inside: Bar, setup: Bar, price: float, mode: str
+) -> float:
+    """Underlying level that invalidates a STRAT combo, always on the losing
+    side of ``price``: the inside bar's opposite extreme, or the setup bar's
+    50% line when ``mode`` is "setup_mid" and that line is tighter."""
+    if side is Side.CALL:
+        if mode == "setup_mid" and inside.low < setup.midpoint < price:
+            return setup.midpoint
+        return inside.low
+    if mode == "setup_mid" and price < setup.midpoint < inside.high:
+        return setup.midpoint
+    return inside.high
+
+
 def _prior_day_bar(quote: Quote) -> Bar | None:
     """Most recent daily bar from a session before today's intraday bars."""
     today = quote.bars[-1].session_date if quote.bars else ""
@@ -493,11 +517,13 @@ def strat_combo_signal(quote: Quote, cfg: Config) -> Signal:
         level_note = f", PDH {prior_day.high:.2f} / PDL {prior_day.low:.2f}"
 
     level = inside.high if side is Side.CALL else inside.low
+    stop_level = _combo_stop_level(side, inside, setup, price, s.strat_stop_mode)
     return Signal(
         side,
         f"STRAT {name}: price {price:.2f} through inside-bar "
         f"{'high' if side is Side.CALL else 'low'} {level:.2f}, setup volume "
-        f"{setup.volume:,.0f}{level_note}",
+        f"{setup.volume:,.0f}{level_note}, stop {stop_level:.2f}",
+        stop_level=stop_level,
     )
 
 
@@ -738,6 +764,24 @@ class Scanner:
             ),
             as_of=self.as_of,
         )
+        stop_level = signal.stop_level if strategy.exits.underlying_stop_enabled else None
+        if stop_level is not None:
+            # Hybrid stop: the chart level only works if the premium loss it
+            # implies (distance x delta, padded 20% for theta/IV/spread) fits
+            # inside the premium backstop -- otherwise the backstop would fire
+            # first and the setup's real invalidation is too far to trade.
+            est_loss = (
+                abs(quote.last - stop_level) * abs(contract.delta) * 1.2
+                / max(contract.mid, 0.01)
+            )
+            if est_loss > strategy.exits.stop_loss_pct:
+                too_wide = (
+                    f"structure stop {stop_level:.2f} too far: est. "
+                    f"-{est_loss:.0%} premium vs {strategy.exits.stop_loss_pct:.0%} backstop"
+                )
+                decision = RiskDecision(
+                    allowed=False, reasons=[*decision.reasons, too_wide]
+                )
         note = signal.note
         if strategy.name != "default":
             note = f"[{strategy.name}] {note}"
@@ -748,6 +792,8 @@ class Scanner:
             decision=decision,
             max_loss=risk.max_loss(contract),
             strategy=strategy.name,
+            underlying_price=quote.last,
+            stop_level=stop_level,
         )
         candidate_id = self.storage.record_candidate(candidate)
         return replace(candidate, id=candidate_id)

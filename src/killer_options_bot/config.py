@@ -67,6 +67,10 @@ class SignalConfig:
     # minimum room (in average bar ranges) to the prior-day high/low.
     strat_volume_mult: float = 1.2
     strat_min_room_ranges: float = 1.0
+    # Where a STRAT combo's invalidation level sits: "inside_extreme" = the
+    # inside bar's opposite extreme (classic), "setup_mid" = the setup bar's
+    # 50% line when that is tighter (a retrace through it means the break failed).
+    strat_stop_mode: str = "inside_extreme"
     # Higher-timeframe trend alignment (used by 'momentum'/'daily_reversal').
     # If > 0, daily closes are bucketed into ``weekly_bar_days``-day groups to
     # build a synthetic weekly series; a CALL is refused while that weekly
@@ -122,6 +126,20 @@ class TrimRule:
 
 
 @dataclass(frozen=True)
+class RatchetRule:
+    """One profit-locking stop tier.
+
+    Once the option's peak gain (high-water mark vs entry) reaches ``peak_pct``
+    the stop floor rises to ``floor_pct``: the position exits if its P/L falls
+    back to that level. 0.0 is breakeven; negative floors still allow a small
+    loss but far less than the configured stop.
+    """
+
+    peak_pct: float
+    floor_pct: float
+
+
+@dataclass(frozen=True)
 class ExitConfig:
     profit_target_pct: float
     stop_loss_pct: float
@@ -138,7 +156,8 @@ class ExitConfig:
     #: REPLACES the fixed ``profit_target_pct`` so winners can run; the stop
     #: loss, max-hold and DTE exits still apply. 0 disables trailing.
     trail_pct: float = 0.0
-    trail_activate_pct: float = 0.0    #: When True, ``trims`` rungs fire off Fibonacci extension price targets
+    trail_activate_pct: float = 0.0
+    #: When True, ``trims`` rungs fire off Fibonacci extension price targets
     #: on the UNDERLYING (projected from the swing low/high over
     #: ``signal.sr_lookback`` daily closes) instead of the option's own
     #: pl_pct. Each configured trim rung is mapped onto the Nth classic
@@ -146,6 +165,19 @@ class ExitConfig:
     #: on those rungs is then unused for triggering (fractions still apply).
     #: False (default) keeps the existing pl_pct-based ladder.
     fib_trim_enabled: bool = False
+    #: Profit-locking floors: tiers sorted by ``peak_pct``. See RatchetRule.
+    ratchet: tuple["RatchetRule", ...] = ()
+    #: Exit when the underlying trades through the level saved on the position
+    #: (``underlying_stop``) by this fraction of its price. ``stop_loss_pct``
+    #: then acts as the hard premium backstop. False = percent stop only.
+    underlying_stop_enabled: bool = False
+    underlying_stop_buffer_pct: float = 0.0005
+    #: Same-day stall exit: after this many minutes in the trade, exit if the
+    #: option never gained ``time_stop_min_peak_pct`` and is currently red.
+    #: 0 disables.
+    time_stop_minutes: int = 0
+    time_stop_min_peak_pct: float = 0.05
+
     @property
     def trailing_enabled(self) -> bool:
         return self.trail_pct > 0.0
@@ -408,6 +440,31 @@ def _build_trims(raw_trims) -> tuple[TrimRule, ...]:
     return tuple(rules)
 
 
+def _build_ratchet(raw) -> tuple[RatchetRule, ...]:
+    """Parse profit-locking tiers: floors may only rise as the peak rises."""
+    rules = sorted(
+        (
+            RatchetRule(
+                peak_pct=float(t.get("peak_pct", 0.0)),
+                floor_pct=float(t.get("floor_pct", 0.0)),
+            )
+            for t in (raw or [])
+        ),
+        key=lambda r: r.peak_pct,
+    )
+    for r in rules:
+        if r.peak_pct <= 0:
+            raise ValueError("exits.ratchet[].peak_pct must be positive")
+        if r.floor_pct >= r.peak_pct:
+            raise ValueError(
+                "exits.ratchet[].floor_pct must be below its peak_pct"
+            )
+    for prev, nxt in zip(rules, rules[1:]):
+        if nxt.floor_pct < prev.floor_pct:
+            raise ValueError("exits.ratchet floors must not decrease")
+    return tuple(rules)
+
+
 def _build_exits(d: dict) -> ExitConfig:
     # Trim ladder: the UI stores trims as flat keys ``trim_N_at_pct`` /
     # ``trim_N_fraction`` in the exits dict (so they flow through the normal
@@ -444,6 +501,11 @@ def _build_exits(d: dict) -> ExitConfig:
         trail_pct=float(d.get("trail_pct", 0.0)),
         trail_activate_pct=float(d.get("trail_activate_pct", 0.0)),
         fib_trim_enabled=bool(d.get("fib_trim_enabled", False)),
+        ratchet=_build_ratchet(d.get("ratchet")),
+        underlying_stop_enabled=bool(d.get("underlying_stop_enabled", False)),
+        underlying_stop_buffer_pct=float(d.get("underlying_stop_buffer_pct", 0.0005)),
+        time_stop_minutes=int(d.get("time_stop_minutes", 0)),
+        time_stop_min_peak_pct=float(d.get("time_stop_min_peak_pct", 0.05)),
     )
     if cfg.profit_target_pct <= 0:
         raise ValueError("exits.profit_target_pct must be positive")
@@ -453,6 +515,10 @@ def _build_exits(d: dict) -> ExitConfig:
         raise ValueError("exits.trail_pct must be between 0 and 1 (0 disables)")
     if cfg.trail_activate_pct < 0:
         raise ValueError("exits.trail_activate_pct must be >= 0")
+    if cfg.underlying_stop_buffer_pct < 0:
+        raise ValueError("exits.underlying_stop_buffer_pct must be >= 0")
+    if cfg.time_stop_minutes < 0:
+        raise ValueError("exits.time_stop_minutes must be >= 0")
     return cfg
 
 
@@ -574,6 +640,7 @@ def load_config(
         strat_atr_period=int(signal.get("strat_atr_period", 10)),
         strat_volume_mult=float(signal.get("strat_volume_mult", 1.2)),
         strat_min_room_ranges=float(signal.get("strat_min_room_ranges", 1.0)),
+        strat_stop_mode=str(signal.get("strat_stop_mode", "inside_extreme")),
         weekly_bar_days=int(signal.get("weekly_bar_days", 0)),
         weekly_sma_period=int(signal.get("weekly_sma_period", 8)),
         sr_lookback=int(signal.get("sr_lookback", 0)),

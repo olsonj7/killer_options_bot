@@ -289,8 +289,17 @@ strategies:
     exits:
       # Directional day trade: take a solid move, cut a failed break quickly.
       profit_target_pct: 0.50
-      # A failed break is wrong fast; keep the loss under the +30% first trim.
-      stop_loss_pct: 0.25
+      # Hybrid stop (2026-11-11): the primary stop is the chart level that
+      # invalidates the combo (inside-bar opposite extreme, saved on the
+      # position as underlying_stop); this is only the premium BACKSTOP. Entry
+      # is skipped when that level implies more than this much premium loss
+      # (distance x delta x 1.2 padding), so the backstop and the chart stop
+      # agree. Raised 0.25 -> 0.35 so theta/IV/spread don't stop out a setup
+      # whose structure is still intact.
+      stop_loss_pct: 0.35
+      underlying_stop_enabled: true
+      # Stalled breakout: 45 min (3 bars) in, still red, never up +5% -> out.
+      time_stop_minutes: 45
       # Day-trade horizon: exit same day, carry to next session at most.
       max_holding_days: 1
       min_dte_exit: 0
@@ -368,6 +377,8 @@ strategies:
       # swing's since LEAPS holds are measured in weeks, not days.
       trail_activate_pct: 0.50
       trail_pct: 0.20
+      # Multi-week hold: +15%/-10% floors would end it on ordinary noise.
+      ratchet: []
 
 
 mode:
@@ -468,6 +479,9 @@ signal:
   # of room to the prior-day high (calls) / low (puts) if not already through.
   strat_volume_mult: 1.2
   strat_min_room_ranges: 1.0
+  # Where a combo's chart stop goes: "inside_extreme" = opposite extreme of the
+  # inside bar; "setup_mid" = the setup bar's 50% line when that is tighter.
+  strat_stop_mode: inside_extreme
   # Higher-timeframe trend alignment, used by the daily 'momentum' /
   # 'daily_reversal' signals ("default" and "weekly_reversion"). Daily closes
   # are bucketed into weekly_bar_days-day groups to build a synthetic weekly
@@ -530,6 +544,19 @@ exits:
       fraction: 0.5
     - at_pct: 0.50   # +50%: sell another quarter
       fraction: 0.25
+  # Profit-lock floors (2026-11-11, inherited by every strategy unless it sets
+  # its own): of 58 losing trades, 24 had been up >= +10% and 16 >= +20% before
+  # reversing to a full stop. Once the option has peaked at +15% the stop
+  # tightens from the usual -25..-33% to -10%; once it has peaked at +25% it
+  # moves to breakeven. UNVALIDATED: stored history has only peaks, not paths,
+  # so the cost of cutting trades that would have recovered is unknown -- review
+  # "profit-lock stop hit" exits (and each position's low_water_mark) after a
+  # couple of weeks.
+  ratchet:
+    - peak_pct: 0.15
+      floor_pct: -0.10
+    - peak_pct: 0.25
+      floor_pct: 0.0
 
 costs:
   # Transaction-cost assumptions for paper fills. Filling at the mid overstates

@@ -272,6 +272,13 @@ def test_config_loads_strat_strategy():
     strat = next(s for s in cfg.active_strategies if s.name == "strat")
     assert strat.signal == "strat_combo"
     assert strat.max_trades_per_day == 1
+    assert strat.exits.underlying_stop_enabled
+    assert strat.exits.time_stop_minutes > 0
+    assert strat.exits.ratchet  # inherited from the base exits block
+    import yaml
+
+    raw = yaml.safe_load(open("config.yaml", encoding="utf-8"))
+    assert raw["strategies"]["leaps"]["exits"]["ratchet"] == []  # opted out
     from killer_options_bot.config import _VALID_SIGNALS
     from killer_options_bot.scanner import _SIGNALS
 

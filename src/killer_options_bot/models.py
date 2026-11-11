@@ -203,6 +203,10 @@ class Candidate:
     #: DB row id, set after the candidate is recorded. Lets the open step
     #: annotate this exact row when a downstream guardrail blocks the trade.
     id: int | None = None
+    #: Underlying price when the signal fired, and the underlying level that
+    #: invalidates the setup (None when the signal has no natural level).
+    underlying_price: float | None = None
+    stop_level: float | None = None
 
 
 class PositionStatus(str, Enum):
@@ -250,6 +254,13 @@ class PaperPosition:
     # how long a position was actually held.
     entry_time: str | None = None
     exit_time: str | None = None
+    # Lowest option mid seen while held (max adverse excursion); the data the
+    # stop rules need to be evaluated after the fact.
+    low_water_mark: float | None = None
+    # Underlying price at entry, and the underlying level that invalidates the
+    # setup (inside-bar extreme for STRAT combos). None = percent stops only.
+    entry_underlying: float | None = None
+    underlying_stop: float | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
@@ -261,6 +272,8 @@ class PaperPosition:
         # fresh position starts at its entry price.
         if self.high_water_mark is None:
             self.high_water_mark = self.entry_price
+        if self.low_water_mark is None:
+            self.low_water_mark = self.entry_price
 
     @property
     def entry_cost(self) -> float:
