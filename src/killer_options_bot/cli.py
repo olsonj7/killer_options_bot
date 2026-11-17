@@ -604,7 +604,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if auth is None and host not in {"127.0.0.1", "localhost", "::1"}:
         print(
             "Refusing to bind a non-local host without auth. "
-            "Add --auth-user (and a password) to enable Basic Auth.",
+            "Add --auth-user (and a password) to enable the login.",
             file=sys.stderr,
         )
         return 1
@@ -1148,11 +1148,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument(
         "--auth-user",
-        help="Enable HTTP Basic Auth with this username",
+        help="Enable the dashboard login with this username",
     )
     p_serve.add_argument(
         "--auth-pass",
-        help="Basic Auth password (or set KOB_AUTH_PASS env var)",
+        help="Login password (or set KOB_AUTH_PASS env var)",
     )
     p_serve.add_argument(
         "--run",

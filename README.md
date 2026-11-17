@@ -162,10 +162,10 @@ python -m killer_options_bot serve --source tradier --port 9000
 - **Export CSV:** the "Export CSV" link (or `GET /export.csv`) downloads all
   positions as a spreadsheet-friendly CSV.
 
-#### Optional Basic Auth (reach it from your phone on the LAN)
+#### Login (reach it from your phone)
 
-By default the dashboard binds to `127.0.0.1` with no auth. To reach it from
-another device, bind to your LAN address **and enable Basic Auth**:
+By default the dashboard binds to `127.0.0.1` with no login. To reach it from
+another device, bind to a non-local address **and enable the login**:
 
 ```bash
 export KOB_AUTH_PASS='choose-a-strong-password'
@@ -175,9 +175,18 @@ python -m killer_options_bot serve --source mock \
 
 The server refuses to bind a non-local host without `--auth-user`. The password
 comes from `--auth-pass` or the `KOB_AUTH_PASS` environment variable (prefer the
-env var so it does not land in your shell history). Basic Auth over plain HTTP
-is only appropriate on a trusted LAN; put it behind HTTPS (a reverse proxy) if
-you expose it more widely.
+env var so it does not land in your shell history). On Railway set
+`KOB_AUTH_USER` and `KOB_AUTH_PASS`.
+
+Visiting any page shows a sign-in form. A successful sign-in sets a signed,
+`HttpOnly` session cookie that lasts 30 days and renews itself while you keep
+using the dashboard, so a phone stays signed in (password managers can fill the
+form). Sessions survive redeploys; changing `KOB_AUTH_PASS` (or setting
+`KOB_SESSION_SECRET`) signs every device out. Five wrong passwords from one
+address lock sign-in for 15 minutes. The cookie is marked `Secure` when served
+through an HTTPS proxy (as on Railway). Scripts can still send HTTP Basic
+credentials (`curl -u jeff:...`). Use HTTPS if you expose it beyond a trusted
+LAN.
 
 ## Project layout
 

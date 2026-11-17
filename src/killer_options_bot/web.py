@@ -2,11 +2,14 @@
 
 Uses only the Python standard library (``http.server``) so it adds no
 dependencies. It binds to 127.0.0.1 by default and is intended for local,
-single-user use during paper trading. Optional HTTP Basic Auth can be enabled
-so it is safe to reach over a trusted LAN (e.g. from your phone); without auth
-it must not be exposed beyond localhost.
+single-user use during paper trading. Optional login (a form plus a signed
+session cookie, so a phone stays signed in) can be enabled so it is safe to
+reach from other devices; without auth it must not be exposed beyond localhost.
 
 Routes:
+  GET  /login      Sign-in form (only when auth is enabled)
+  POST /login      Check credentials, set the session cookie
+  POST /logout     Clear the session cookie
   GET  /           Dashboard: P&L summary, equity curve, positions, candidates
   POST /scan       Run a scan (log candidates only)
   POST /scan-paper Run a scan and open paper positions for allowed candidates
@@ -18,13 +21,17 @@ Routes:
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import html
+import os
+import time
 from datetime import date, datetime, timezone
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 import yaml
 
@@ -1532,14 +1539,165 @@ def _render_config_page(
 </html>"""
 
 
+# --- Login sessions ---------------------------------------------------------
+
+SESSION_COOKIE = "kob_session"
+SESSION_DAYS = 30
+_RENEW_BELOW_DAYS = 20
+_LOGIN_MAX_FAILS = 5
+_LOGIN_WINDOW_S = 15 * 60
+
+
+def _session_key(user: str, password: str) -> bytes:
+    """HMAC key derived from the credentials (and optional KOB_SESSION_SECRET).
+
+    Derived rather than random-per-process so phones stay signed in across
+    redeploys; changing the password invalidates every existing session.
+    """
+    parts = ("kob-session-v1", user, password, os.getenv("KOB_SESSION_SECRET", ""))
+    return hashlib.sha256("|".join(parts).encode("utf-8")).digest()
+
+
+def _sign_session(key: bytes, user: str, expires: int) -> str:
+    payload = base64.urlsafe_b64encode(f"{user}|{expires}".encode("utf-8"))
+    payload_s = payload.decode("ascii").rstrip("=")  # '=' would force quoting
+    sig = hmac.new(key, payload_s.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{payload_s}.{sig}"
+
+
+def _verify_session(key: bytes, token: str, user: str, now: float) -> int | None:
+    """Expiry timestamp if ``token`` is a valid, unexpired session for ``user``."""
+    payload, _, sig = token.partition(".")
+    expected = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not payload or not hmac.compare_digest(sig.encode("utf-8"), expected.encode()):
+        return None
+    try:
+        padded = payload + "=" * (-len(payload) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        name, _, exp = raw.rpartition("|")
+        expires = int(exp)
+    except (ValueError, UnicodeError):
+        return None
+    if not hmac.compare_digest(name.encode("utf-8"), user.encode("utf-8")):
+        return None
+    return expires if expires > now else None
+
+
+def _safe_next(target: str | None) -> str:
+    """Only same-site paths are valid post-login destinations."""
+    t = target or ""
+    if (
+        t.startswith("/")
+        and not t.startswith(("//", "/login", "/logout"))
+        and not any(c in t for c in "\\\r\n")
+    ):
+        return t
+    return "/"
+
+
+class _LoginLimiter:
+    """Blocks password guessing: a few failures per client, ten times that overall."""
+
+    def __init__(
+        self,
+        max_fails: int = _LOGIN_MAX_FAILS,
+        window: float = _LOGIN_WINDOW_S,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        import threading
+
+        self._max, self._window, self._clock = max_fails, window, clock
+        self._fails: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def _recent(self, key: str) -> list[float]:
+        cutoff = self._clock() - self._window
+        kept = [t for t in self._fails.get(key, []) if t > cutoff]
+        self._fails[key] = kept
+        return kept
+
+    def blocked(self, client: str) -> bool:
+        with self._lock:
+            return (
+                len(self._recent(client)) >= self._max
+                or len(self._recent("*")) >= self._max * 10
+            )
+
+    def record_failure(self, client: str) -> None:
+        with self._lock:
+            now = self._clock()
+            self._recent(client).append(now)
+            self._recent("*").append(now)
+
+    def reset(self, client: str) -> None:
+        with self._lock:
+            self._fails.pop(client, None)
+
+
+def _render_login(error: str = "", next_path: str = "/") -> str:
+    err = f"<div class='err'>{html.escape(error)}</div>" if error else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in &mdash; Killer Options Bot</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; background: #0d1117; color: #c9d1d9;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+  form {{ width: min(360px, 92vw); background: #161b22; border: 1px solid #30363d;
+         border-radius: 10px; padding: 24px; }}
+  h1 {{ font-size: 18px; margin: 0 0 18px; color: #fff; }}
+  label {{ display: block; font-size: 13px; color: #8b949e; margin: 12px 0 4px; }}
+  input {{ width: 100%; padding: 10px 12px; font-size: 16px; color: #c9d1d9;
+          background: #0d1117; border: 1px solid #30363d; border-radius: 6px; }}
+  input:focus {{ outline: none; border-color: #58a6ff; }}
+  button {{ width: 100%; margin-top: 18px; padding: 11px; font-size: 16px;
+           color: #fff; background: #238636; border: 0; border-radius: 6px; }}
+  .err {{ background: #3d1f20; border: 1px solid #f85149; color: #ffa198;
+         padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }}
+  .hint {{ font-size: 12px; color: #8b949e; margin-top: 14px; text-align: center; }}
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Killer Options Bot</h1>
+  {err}
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username"
+         autocapitalize="none" autocorrect="off" spellcheck="false" autofocus required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password"
+         autocomplete="current-password" required>
+  <input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">
+  <button type="submit">Sign in</button>
+  <div class="hint">You stay signed in on this device for {SESSION_DAYS} days.</div>
+</form>
+</body>
+</html>"""
+
+
 def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
+    session_key = _session_key(*auth) if auth else b""
+    limiter = _LoginLimiter()
+
     class Handler(BaseHTTPRequestHandler):
+        _pending_cookie: str | None = None
+
+        def _end_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            if self._pending_cookie:
+                self.send_header("Set-Cookie", self._pending_cookie)
+            self.end_headers()
+
         def _send_html(self, body: str, status: int = 200) -> None:
             encoded = body.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
-            self.end_headers()
+            self._end_headers()
             self.wfile.write(encoded)
 
         def _send_csv(self, body: str, filename: str) -> None:
@@ -1550,17 +1708,53 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
                 "Content-Disposition", f'attachment; filename="{filename}"'
             )
             self.send_header("Content-Length", str(len(encoded)))
-            self.end_headers()
+            self._end_headers()
             self.wfile.write(encoded)
 
         def _redirect(self, location: str) -> None:
             self.send_response(303)
             self.send_header("Location", location)
-            self.end_headers()
+            self._end_headers()
 
-        def _authorized(self) -> bool:
-            if auth is None:
-                return True
+        def _client_key(self) -> str:
+            # Behind a proxy the LAST X-Forwarded-For entry is the one the proxy
+            # itself appended; earlier entries are client-controlled.
+            fwd = self.headers.get("X-Forwarded-For", "")
+            if fwd:
+                return fwd.split(",")[-1].strip()
+            return self.client_address[0]
+
+        def _cookie_header(self, token: str, max_age: int) -> str:
+            parts = [
+                f"{SESSION_COOKIE}={token}", "Path=/", f"Max-Age={max_age}",
+                "HttpOnly", "SameSite=Lax",
+            ]
+            if self.headers.get("X-Forwarded-Proto", "").lower() == "https":
+                parts.append("Secure")
+            return "; ".join(parts)
+
+        def _issue_session(self) -> None:
+            expires = int(time.time()) + SESSION_DAYS * 86400
+            token = _sign_session(session_key, auth[0], expires)
+            self._pending_cookie = self._cookie_header(token, SESSION_DAYS * 86400)
+
+        def _session_valid(self) -> bool:
+            raw = self.headers.get("Cookie", "")
+            try:
+                morsel = SimpleCookie(raw).get(SESSION_COOKIE)
+            except Exception:
+                return False
+            if morsel is None:
+                return False
+            expires = _verify_session(session_key, morsel.value, auth[0], time.time())
+            if expires is None:
+                return False
+            # Sliding window: an active phone never has to sign in again.
+            if expires - time.time() < _RENEW_BELOW_DAYS * 86400:
+                self._issue_session()
+            return True
+
+        def _basic_valid(self) -> bool:
             header = self.headers.get("Authorization", "")
             if not header.startswith("Basic "):
                 return False
@@ -1570,32 +1764,87 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
             except (ValueError, UnicodeDecodeError):
                 return False
             # Constant-time comparison to avoid timing leaks.
-            ok_user = hmac.compare_digest(user, auth[0])
-            ok_pwd = hmac.compare_digest(pwd, auth[1])
+            ok_user = hmac.compare_digest(user.encode("utf-8"), auth[0].encode("utf-8"))
+            ok_pwd = hmac.compare_digest(pwd.encode("utf-8"), auth[1].encode("utf-8"))
             return ok_user and ok_pwd
 
-        def _require_auth(self) -> bool:
+        def _authorized(self) -> bool:
+            if auth is None:
+                return True
+            # Basic stays accepted for scripts (curl -u); browsers use the form.
+            return self._session_valid() or self._basic_valid()
+
+        def _require_auth(self, get: bool = False) -> bool:
             if self._authorized():
                 return True
-            self.send_response(401)
-            self.send_header(
-                "WWW-Authenticate", 'Basic realm="Killer Options Bot"'
-            )
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+            nxt = f"?next={quote(self.path, safe='')}" if get else ""
+            self._redirect("/login" + nxt)
             return False
 
+        def _with_logout(self, body: str) -> str:
+            if auth is None:
+                return body
+            button = (
+                "<form method='post' action='/logout' style='margin-top:6px'>"
+                "<button type='submit' class='secondary' "
+                "style='padding:4px 10px;font-size:12px;width:auto'>Log out</button>"
+                "</form>"
+            )
+            return body.replace("</header>", button + "</header>", 1)
+
+        def _login_get(self) -> None:
+            query = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            nxt = _safe_next((query.get("next") or ["/"])[0])
+            if auth is None or self._authorized():
+                self._redirect(nxt)
+                return
+            self._send_html(_render_login(next_path=nxt))
+
+        def _login_post(self, body: bytes) -> None:
+            form = parse_qs(body.decode("utf-8", "replace"))
+            nxt = _safe_next((form.get("next") or ["/"])[0])
+            if auth is None:
+                self._redirect(nxt)
+                return
+            client = self._client_key()
+            if limiter.blocked(client):
+                self._send_html(
+                    _render_login("Too many attempts. Try again in 15 minutes.", nxt),
+                    status=429,
+                )
+                return
+            user = (form.get("username") or [""])[0]
+            pwd = (form.get("password") or [""])[0]
+            ok_user = hmac.compare_digest(user.encode("utf-8"), auth[0].encode("utf-8"))
+            ok_pwd = hmac.compare_digest(pwd.encode("utf-8"), auth[1].encode("utf-8"))
+            if ok_user and ok_pwd:
+                limiter.reset(client)
+                self._issue_session()
+                self._redirect(nxt)
+                return
+            limiter.record_failure(client)
+            self._send_html(
+                _render_login("Invalid username or password.", nxt), status=401
+            )
+
         def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
-            if not self._require_auth():
+            if self.path.split("?", 1)[0] == "/login":
+                self._login_get()
+                return
+            if not self._require_auth(get=True):
                 return
             path = self.path.split("?", 1)[0]
             if path == "/":
                 query = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 range_key = (query.get("range") or ["all"])[0]
-                self._send_html(dashboard.render(_pop_flash(), range_key))
+                self._send_html(
+                    self._with_logout(dashboard.render(_pop_flash(), range_key))
+                )
                 return
             if path == "/config":
-                self._send_html(dashboard.render_config(_pop_flash()))
+                self._send_html(
+                    self._with_logout(dashboard.render_config(_pop_flash()))
+                )
                 return
             if path == "/export.csv":
                 self._send_csv(dashboard.export_csv(), "positions.csv")
@@ -1603,11 +1852,21 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
             self._send_html("<h1>404</h1>", status=404)
 
         def do_POST(self) -> None:  # noqa: N802
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            path = self.path.split("?", 1)[0]
+            if path == "/login":
+                self._login_post(self.rfile.read(min(length, 4096)) if length else b"")
+                return
+            if path == "/logout":
+                self._pending_cookie = self._cookie_header("", 0)
+                self._redirect("/login" if auth else "/")
+                return
             if not self._require_auth():
                 return
-            length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
-            path = self.path.split("?", 1)[0]
 
             if path == "/config":
                 form = parse_qs(body.decode("utf-8"))
@@ -1676,7 +1935,7 @@ def serve(
     handler = _make_handler(dashboard, auth=auth)
     server = ThreadingHTTPServer((host, port), handler)
     print(f"Killer Options Bot dashboard: http://{host}:{port}  (Ctrl+C to stop)")
-    auth_txt = f"basic auth as '{auth[0]}'" if auth else "no auth"
+    auth_txt = f"login form as '{auth[0]}'" if auth else "no auth"
     print(f"  config={config_path} source={source} ({auth_txt})")
     if auth is None and host not in {"127.0.0.1", "localhost", "::1"}:
         print(
