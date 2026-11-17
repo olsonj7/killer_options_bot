@@ -1754,25 +1754,12 @@ def _make_handler(dashboard: Dashboard, auth: tuple[str, str] | None = None):
                 self._issue_session()
             return True
 
-        def _basic_valid(self) -> bool:
-            header = self.headers.get("Authorization", "")
-            if not header.startswith("Basic "):
-                return False
-            try:
-                decoded = base64.b64decode(header[6:]).decode("utf-8")
-                user, _, pwd = decoded.partition(":")
-            except (ValueError, UnicodeDecodeError):
-                return False
-            # Constant-time comparison to avoid timing leaks.
-            ok_user = hmac.compare_digest(user.encode("utf-8"), auth[0].encode("utf-8"))
-            ok_pwd = hmac.compare_digest(pwd.encode("utf-8"), auth[1].encode("utf-8"))
-            return ok_user and ok_pwd
-
         def _authorized(self) -> bool:
             if auth is None:
                 return True
-            # Basic stays accepted for scripts (curl -u); browsers use the form.
-            return self._session_valid() or self._basic_valid()
+            # Cookie only: browsers cache Basic credentials from the old pop-up
+            # and resend them forever, which made Log out sign you straight back in.
+            return self._session_valid()
 
         def _require_auth(self, get: bool = False) -> bool:
             if self._authorized():

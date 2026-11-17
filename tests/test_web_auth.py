@@ -200,16 +200,20 @@ def test_bruteforce_is_locked_out_even_for_the_right_password(server):
     assert status == 429 and "Too many attempts" in page
 
 
-def test_basic_auth_still_works_for_scripts(server):
+def test_cached_basic_credentials_cannot_bypass_login_or_logout(server):
+    # Browsers that signed in via the old pop-up keep sending the Basic header;
+    # it must not authorize anything, or Log out would sign them straight back in.
     import base64
 
     port = server()
-    token = base64.b64encode(f"{USER}:{PWD}".encode()).decode()
-    assert _req(port, "GET", "/export.csv",
-                headers={"Authorization": f"Basic {token}"})[0] == 200
-    bad = base64.b64encode(f"{USER}:wrong".encode()).decode()
-    assert _req(port, "GET", "/export.csv",
-                headers={"Authorization": f"Basic {bad}"})[0] == 303
+    for pwd in (PWD, "wrong"):
+        token = base64.b64encode(f"{USER}:{pwd}".encode()).decode()
+        hdr = {"Authorization": f"Basic {token}"}
+        assert _req(port, "GET", "/", headers=hdr)[0] == 303
+        assert _req(port, "GET", "/export.csv", headers=hdr)[0] == 303
+        assert _req(port, "POST", "/manage", headers=hdr)[0] == 303
+        status, _, page = _req(port, "GET", "/login", headers=hdr)
+        assert status == 200 and "Sign in" in page  # the form, not a redirect home
 
 
 def test_no_auth_means_no_login(server):

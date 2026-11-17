@@ -184,8 +184,8 @@ using the dashboard, so a phone stays signed in (password managers can fill the
 form). Sessions survive redeploys; changing `KOB_AUTH_PASS` (or setting
 `KOB_SESSION_SECRET`) signs every device out. Five wrong passwords from one
 address lock sign-in for 15 minutes. The cookie is marked `Secure` when served
-through an HTTPS proxy (as on Railway). Scripts can still send HTTP Basic
-credentials (`curl -u jeff:...`). Use HTTPS if you expose it beyond a trusted
+through an HTTPS proxy (as on Railway). HTTP Basic credentials are not accepted:
+browsers cache them and would defeat Log out. Use HTTPS if you expose it beyond a trusted
 LAN.
 
 ## Project layout
