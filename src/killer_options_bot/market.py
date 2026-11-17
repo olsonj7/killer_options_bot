@@ -190,3 +190,17 @@ def in_opening_range(moment: datetime | None = None) -> bool:
 def past_zero_dte_cutoff(moment: datetime | None = None) -> bool:
     """True at/after ``ZERO_DTE_ENTRY_CUTOFF`` (Eastern)."""
     return _as_eastern(moment or now_eastern()).time() >= ZERO_DTE_ENTRY_CUTOFF
+
+
+def entry_block_reason(dte: int, moment: datetime | None = None) -> str | None:
+    """Why a NEW entry has to wait right now, or None if the clock allows it.
+
+    The opening range blocks every entry (wide spreads and noise; trades opened
+    9:30-10:00 won 33-37% in both trade-history eras vs ~47% afterwards); the
+    late-session cutoff blocks only same-day expiries.
+    """
+    if in_opening_range(moment):
+        return "blocked: opening-range guard (first 30 min)"
+    if dte <= 0 and past_zero_dte_cutoff(moment):
+        return "blocked: no new 0DTE entries after 3:00 PM ET"
+    return None

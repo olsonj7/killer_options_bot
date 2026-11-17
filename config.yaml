@@ -101,11 +101,8 @@ strategies:
     # versa) on the same underlying -- that's not a hedge, it's two opposing
     # weekly bets cancelling each other out. See config.py StrategyConfig.
     conflict_group: weekly
-    contract_filters:
-      # Tighter than the base 0.12: this strategy holds for days, so a wide
-      # spread on entry makes it easy for the mid to gap straight past the
-      # stop between 60s manage ticks. Narrower spreads = less slippage risk.
-      max_spread_pct: 0.08
+    # NOTE: this strategy's contract_filters come from the BASE contract_filters
+    # section below (a per-profile block here is ignored for "default").
     limits:
       # One entry per underlying per day: without this, a stopped-out weekly
       # position could re-enter the same underlying same-day and chase the
@@ -129,7 +126,9 @@ strategies:
       max_dte: 1
       min_delta: 0.35
       max_delta: 0.55
-      max_spread_pct: 0.18
+      # 0.18 -> 0.05 (2026-11-17): zerodte entries at <=3% spread won 71% (7),
+      # above 5% they went 0-for-2. The spread is a full round-trip cost.
+      max_spread_pct: 0.05
       # 0-1 DTE quoted IV isn't comparable to 20-day realized vol.
       max_iv_hv_ratio: 0
     exits:
@@ -424,8 +423,11 @@ contract_filters:
   # exposure.
   min_delta: 0.20
   max_delta: 0.40
-  # Reject if (ask - bid) / mid exceeds this fraction.
-  max_spread_pct: 0.12
+  # Reject if (ask - bid) / mid exceeds this fraction. 0.12 -> 0.04
+  # (2026-11-17): this is the cap the "default" strategy actually runs on. Of
+  # its entries, <=3% spread won 70% (n=10) vs 17% above (n=6); the spread is
+  # paid in full round-trip, so at 5%+ it eats a fifth of a +25% target.
+  max_spread_pct: 0.04
   min_volume: 100
   min_open_interest: 500
   # Skip contracts whose IV is > 1.5x the stock's 20-day realized vol: the

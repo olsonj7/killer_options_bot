@@ -78,6 +78,19 @@ def test_naive_datetime_treated_as_eastern():
     assert market.is_market_open(datetime(2026, 7, 8, 10, 0))
 
 
+def test_entry_block_reason():
+    t = lambda h, m: datetime(2026, 7, 8, h, m, tzinfo=ET)  # noqa: E731
+    # Opening range blocks EVERY expiry, not just same-day.
+    assert "opening-range" in market.entry_block_reason(0, t(9, 45))
+    assert "opening-range" in market.entry_block_reason(10, t(9, 45))
+    # Mid-session: everything allowed.
+    assert market.entry_block_reason(0, t(11, 0)) is None
+    assert market.entry_block_reason(10, t(11, 0)) is None
+    # Late session: only same-day expiries are blocked.
+    assert "3:00 PM" in market.entry_block_reason(0, t(15, 5))
+    assert market.entry_block_reason(1, t(15, 5)) is None
+
+
 def test_2026_holiday_calendar():
     from datetime import date
 

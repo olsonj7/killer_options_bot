@@ -871,33 +871,19 @@ def run_loop(
                         continue
                     if not paper:
                         continue
-                    # 0DTE opening-range guard: do not open same-day-expiry
-                    # positions in the first 30 minutes of the session (the noisy,
-                    # wide-spread opening range). Existing positions are still
-                    # managed above; this only blocks NEW 0DTE entries. Bypassed
-                    # when the trading clock is ignored (backtest/tests).
-                    if (
-                        not ignore_market_hours
-                        and candidate.contract.dte(as_of) <= 0
-                        and market.in_opening_range()
-                    ):
-                        skipped_open_range = True
+                    # Entry-time guards (opening range for every entry, late-day
+                    # cutoff for 0DTE). Existing positions are still managed
+                    # above; this only blocks NEW entries. Bypassed when the
+                    # trading clock is ignored (backtest/tests).
+                    block = (
+                        None
+                        if ignore_market_hours
+                        else market.entry_block_reason(candidate.contract.dte(as_of))
+                    )
+                    if block is not None:
+                        skipped_open_range = skipped_open_range or "opening" in block
                         if candidate.id is not None:
-                            storage.mark_candidate_blocked(
-                                candidate.id,
-                                "blocked: 0DTE opening-range guard (first 30 min)",
-                            )
-                        continue
-                    if (
-                        not ignore_market_hours
-                        and candidate.contract.dte(as_of) <= 0
-                        and market.past_zero_dte_cutoff()
-                    ):
-                        if candidate.id is not None:
-                            storage.mark_candidate_blocked(
-                                candidate.id,
-                                "blocked: no new 0DTE entries after 3:00 PM ET",
-                            )
+                            storage.mark_candidate_blocked(candidate.id, block)
                         continue
                     position = engine.open_from_candidate(candidate)
                     if position is not None:
@@ -911,7 +897,7 @@ def run_loop(
             if scanned and opened == 0:
                 extra = f" (skipped {skipped})" if skipped else ""
                 if skipped_open_range:
-                    extra += " (0DTE opening-range guard active)"
+                    extra += " (opening-range guard active)"
                 log(f"[{stamp}] scanned {scanned}: no new entries{extra}")
             cycles += 1
             if once:
