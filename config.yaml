@@ -55,7 +55,8 @@ account_tiers:
       # simultaneous exposure for a $2200 account; fewer concurrent slots
       # forces the scanner to be pickier about which signal actually gets a
       # position instead of taking every strategy's candidate at once.
-      max_open_positions: 3
+      # Recovery profile (2026-11-24): cap portfolio-wide open risk at two.
+      max_open_positions: 2
     contract_filters:
       min_delta: 0.20
       max_delta: 0.35
@@ -96,6 +97,10 @@ strategies:
     # The base weekly momentum trade. Only its scan cadence is set here; its
     # filters/exits come from the base (tier-adjusted) config sections below.
     scan_interval_minutes: 15
+    # Recovery mode (2026-11-24): CALLs were 1/6 (-$350) for this strategy
+    # while PUTs were 9/14 (+$518). Keep the stronger direction until 20 new
+    # gated trades establish otherwise.
+    allowed_sides: [put]
     # Shared with "weekly_reversion": both hold for about a week, so the bot
     # must never have one open a PUT while the other holds a CALL (or vice
     # versa) on the same underlying -- that's not a hedge, it's two opposing
@@ -114,6 +119,10 @@ strategies:
     # Uses the INTRADAY momentum signal: a same-day option should be traded off
     # same-day price action, not stale daily closes.
     signal: intraday_momentum
+    # Recovery mode (2026-11-24): CALLs were 0/7 (-$619) while PUTs were 8/11
+    # (+$570). Re-enable calls only after the completed-bar + regime gate has a
+    # 20-trade sample with positive expectancy.
+    allowed_sides: [put]
     # Fast-moving, same-day expiry: hunt for entries every couple of minutes.
     scan_interval_minutes: 2
     # Shared with "reversal_0dte": both are same-day/0DTE cadence, so the bot
@@ -153,8 +162,9 @@ strategies:
         - at_pct: 0.50   # +50%: sell another quarter
           fraction: 0.25
     limits:
-      # Synced to DB overrides (2026-10-01).
-      max_trades_per_day: 3
+      # Recovery profile: never exceed the account-wide 2-entry cap even if
+      # that global setting is later raised temporarily.
+      max_trades_per_day: 2
       # No new 0DTE momentum entries during the low-volume midday chop window.
       skip_midday: true
   fast_momentum:
@@ -396,9 +406,9 @@ risk:
   # paid. It is set relatively high because the tight stop-loss below is the
   # real loss limiter: a 30% premium cap with a 25% stop means the actual loss
   # per trade is only ~7-8% of the account.
-  max_trade_risk_pct: 0.30
+  max_trade_risk_pct: 0.15
   # Max simultaneous open positions (enforced in paper/live phases).
-  max_open_positions: 3
+  max_open_positions: 2
   # Max new trades logged per calendar week, per strategy (see
   # storage.trades_in_current_week -- deliberately scoped per-strategy so a
   # fast-cadence strategy can't exhaust a shared limit and starve the others).
@@ -452,6 +462,10 @@ signal:
   # momentum entries; RSI only vetoes blown-out readings (call > rsi_max,
   # put < 100 - rsi_max). rsi_min is unused by momentum in this mode.
   rsi_sanity_only: true
+  # Recovery profile (2026-11-24): SPY and QQQ must provide a unanimous CALL
+  # or PUT on the matching timeframe (daily for default/swing; intraday for
+  # zerodte/strat). A mixed or neutral read blocks the candidate.
+  require_index_confirmation: true
   # Quality gates that make entries far pickier (both signals use these):
   #  - price must sit at least this fraction BEYOND the SMA, not just on the
   #    right side of it, so noise around the mean does not trigger a trade.
@@ -546,19 +560,10 @@ exits:
       fraction: 0.5
     - at_pct: 0.50   # +50%: sell another quarter
       fraction: 0.25
-  # Profit-lock floors (2026-11-11, inherited by every strategy unless it sets
-  # its own): of 58 losing trades, 24 had been up >= +10% and 16 >= +20% before
-  # reversing to a full stop. Once the option has peaked at +15% the stop
-  # tightens from the usual -25..-33% to -10%; once it has peaked at +25% it
-  # moves to breakeven. UNVALIDATED: stored history has only peaks, not paths,
-  # so the cost of cutting trades that would have recovered is unknown -- review
-  # "profit-lock stop hit" exits (and each position's low_water_mark) after a
-  # couple of weeks.
-  ratchet:
-    - peak_pct: 0.15
-      floor_pct: -0.10
-    - peak_pct: 0.25
-      floor_pct: 0.0
+  # Profit ratchet disabled in recovery mode (2026-11-24): its first 6 exits
+  # were 0 wins / -$396 because negative floors converted paper gains into real
+  # losses. The existing trim ladder still locks actual cash on partial exits.
+  ratchet: []
 
 costs:
   # Transaction-cost assumptions for paper fills. Filling at the mid overstates

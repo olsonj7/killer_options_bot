@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from conftest import make_config
 
 from killer_options_bot.brokers.mock import MockMarketData
+from killer_options_bot.brokers.tradier import _completed_bar_end
 from killer_options_bot.config import SignalConfig
 from killer_options_bot.models import Quote, Side
 from killer_options_bot.scanner import (
@@ -16,6 +17,14 @@ from killer_options_bot.scanner import (
     intraday_momentum_signal,
 )
 from killer_options_bot.storage import Storage
+
+
+def test_completed_bar_end_excludes_active_bucket():
+    at = datetime(2026, 11, 24, 10, 2, 30)
+    assert _completed_bar_end(at, "5min") == datetime(2026, 11, 24, 9, 59, 59)
+    assert _completed_bar_end(at, "15min") == datetime(2026, 11, 24, 9, 59, 59)
+    boundary = datetime(2026, 11, 24, 10, 15, 0)
+    assert _completed_bar_end(boundary, "15min") == datetime(2026, 11, 24, 10, 14, 59)
 
 
 def _cfg(tmp_path, **signal_overrides):

@@ -120,6 +120,21 @@ def _rsi_allows(r: float, s, up: bool) -> bool:
     return s.rsi_min <= r <= s.rsi_max if up else r < s.rsi_min
 
 
+def _rsi_note(r: float, s, up: bool) -> str:
+    if s.rsi_sanity_only:
+        ceiling = s.rsi_max if up else 100 - s.rsi_max
+        return (
+            f"RSI {r:.1f} <= {ceiling:.0f} sanity ceiling"
+            if up
+            else f"RSI {r:.1f} >= {ceiling:.0f} sanity floor"
+        )
+    return (
+        f"RSI {r:.1f} in [{s.rsi_min:.0f},{s.rsi_max:.0f}]"
+        if up
+        else f"RSI {r:.1f} < {s.rsi_min:.0f}"
+    )
+
+
 def momentum_signal(quote: Quote, cfg: Config) -> Signal:
     """Very simple momentum gate.
 
@@ -178,8 +193,7 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.CALL,
             f"Bullish: last {quote.last:.2f} > SMA{s.sma_period} {ma:.2f} "
-            f"(+{s.trend_buffer_pct:.1%} buffer), RSI {r:.1f} in "
-            f"[{s.rsi_min:.0f},{s.rsi_max:.0f}]",
+            f"(+{s.trend_buffer_pct:.1%} buffer), {_rsi_note(r, s, True)}",
         )
     if (
         quote.last < lower
@@ -205,7 +219,7 @@ def momentum_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.PUT,
             f"Bearish: last {quote.last:.2f} < SMA{s.sma_period} {ma:.2f} "
-            f"(-{s.trend_buffer_pct:.1%} buffer), RSI {r:.1f} < {s.rsi_min:.0f}",
+            f"(-{s.trend_buffer_pct:.1%} buffer), {_rsi_note(r, s, False)}",
         )
     return Signal(
         None,
@@ -242,8 +256,7 @@ def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.CALL,
             f"Intraday bullish: {price:.2f} > SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), RSI {r:.1f} in "
-            f"[{s.rsi_min:.0f},{s.rsi_max:.0f}]",
+            f"{ma:.2f} (+{s.trend_buffer_pct:.1%}), {_rsi_note(r, s, True)}",
         )
     if (
         price < lower
@@ -253,7 +266,7 @@ def intraday_momentum_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(
             Side.PUT,
             f"Intraday bearish: {price:.2f} < SMA{s.intraday_sma_period} "
-            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), RSI {r:.1f} < {s.rsi_min:.0f}",
+            f"{ma:.2f} (-{s.trend_buffer_pct:.1%}), {_rsi_note(r, s, False)}",
         )
     return Signal(
         None,
@@ -474,12 +487,13 @@ def strat_combo_signal(quote: Quote, cfg: Config) -> Signal:
         return Signal(None, "No STRAT combo: setup bar is an inside bar")
     pattern = "3-1-2" if setup_type == "3" else "2-1-2"
 
-    if trigger.high > inside.high and trigger.close > inside.high:
-        side, label = Side.CALL, "2up"
-    elif trigger.low < inside.low and trigger.close < inside.low:
-        side, label = Side.PUT, "2down"
+    trigger_type = strat_bar_type(trigger, inside)
+    if trigger_type == "2up" and trigger.close > inside.high:
+        side, label = Side.CALL, trigger_type
+    elif trigger_type == "2down" and trigger.close < inside.low:
+        side, label = Side.PUT, trigger_type
     else:
-        return Signal(None, f"{pattern} waiting: inside bar not broken")
+        return Signal(None, f"{pattern} waiting: trigger is not a 2 bar")
     name = f"{pattern} ({setup_type}-1-{label})"
 
     prior_vols = [b.volume for b in bars[-3 - s.strat_atr_period:-3] if b.volume > 0]
@@ -605,6 +619,24 @@ def strat_breakout_signal(quote: Quote, cfg: Config) -> Signal:
     )
 
 
+def _candidate_quality(contract: OptionContract, cfg: Config) -> float:
+    """Rank a contract's execution quality on a stable 0..1 scale.
+
+    Spread dominates because a percentage point paid round-trip is certain;
+    liquidity is discounted and the delta fit is a tie-breaker around the
+    midpoint of the strategy's target band.
+    """
+    f = cfg.filters
+    spread_den = max(f.max_spread_pct, 1e-9)
+    spread = max(0.0, 1.0 - contract.spread_pct / spread_den)
+    midpoint = (f.min_delta + f.max_delta) / 2
+    half_band = max((f.max_delta - f.min_delta) / 2, 1e-9)
+    delta_fit = max(0.0, 1.0 - abs(abs(contract.delta) - midpoint) / half_band)
+    volume = min(1.0, contract.volume / max(1, f.min_volume * 3))
+    interest = min(1.0, contract.open_interest / max(1, f.min_open_interest * 2))
+    return round(0.45 * spread + 0.20 * delta_fit + 0.20 * interest + 0.15 * volume, 4)
+
+
 def _best_contract(
     contracts: list[OptionContract], cfg: Config, as_of: date,
     hv: float | None = None,
@@ -675,6 +707,36 @@ class Scanner:
         self.data = data
         self.storage = storage
         self.as_of = as_of or date.today()
+        self._index_regime_cache: dict[str, tuple[Side | None, str]] = {}
+
+    def _index_regime(self, *, intraday: bool) -> tuple[Side | None, str]:
+        """SPY/QQQ consensus on the matching timeframe, cached per scan."""
+        key = "intraday" if intraday else "daily"
+        if key in self._index_regime_cache:
+            return self._index_regime_cache[key]
+        sides: list[Side] = []
+        notes: list[str] = []
+        for symbol in ("SPY", "QQQ"):
+            quote = self.data.get_quote(symbol)
+            if intraday:
+                getter = getattr(self.data, "get_intraday_closes", None)
+                bars = getter(symbol, self.config.signal.intraday_interval) if getter else []
+                quote = replace(quote, intraday=bars)
+                signal = intraday_momentum_signal(quote, self.config)
+            else:
+                signal = momentum_signal(quote, self.config)
+            if signal.side is not None:
+                sides.append(signal.side)
+            notes.append(
+                f"{symbol}={signal.side.value if signal.side is not None else 'neutral'}"
+            )
+        regime = sides[0] if len(sides) == 2 and sides[0] is sides[1] else None
+        detail = ", ".join(notes)
+        if regime is None:
+            detail += "; no unanimous SPY/QQQ direction"
+        result = (regime, detail)
+        self._index_regime_cache[key] = result
+        return result
 
     def scan_symbol_strategy(
         self, symbol: str, strategy: StrategyConfig
@@ -736,6 +798,8 @@ class Scanner:
         signal = _signal_for(strategy, quote, scfg)
         if signal.side is None:
             return None
+        if signal.side not in strategy.allowed_sides:
+            return None
 
         # Cadence-mates (e.g. "default" and "weekly_reversion" share a
         # conflict_group) must not hold opposite sides on the same name at
@@ -764,6 +828,25 @@ class Scanner:
             ),
             as_of=self.as_of,
         )
+        regime_note = ""
+        if scfg.signal.require_index_confirmation:
+            intraday = strategy.signal in _INTRADAY_SIGNALS | _BAR_SIGNALS
+            regime, detail = self._index_regime(intraday=intraday)
+            if regime is None:
+                decision = RiskDecision(
+                    allowed=False,
+                    reasons=[*decision.reasons, f"index regime unconfirmed: {detail}"],
+                )
+            elif signal.side is not regime:
+                decision = RiskDecision(
+                    allowed=False,
+                    reasons=[
+                        *decision.reasons,
+                        f"trade {signal.side.value} opposes index regime {detail}",
+                    ],
+                )
+            else:
+                regime_note = f"; index regime {detail}"
         stop_level = signal.stop_level if strategy.exits.underlying_stop_enabled else None
         if stop_level is not None:
             # Hybrid stop: the chart level only works if the premium loss it
@@ -782,7 +865,8 @@ class Scanner:
                 decision = RiskDecision(
                     allowed=False, reasons=[*decision.reasons, too_wide]
                 )
-        note = signal.note
+        quality_score = _candidate_quality(contract, scfg)
+        note = f"{signal.note}{regime_note}; entry quality {quality_score:.2f}"
         if strategy.name != "default":
             note = f"[{strategy.name}] {note}"
         candidate = Candidate(
@@ -794,6 +878,7 @@ class Scanner:
             strategy=strategy.name,
             underlying_price=quote.last,
             stop_level=stop_level,
+            quality_score=quality_score,
         )
         candidate_id = self.storage.record_candidate(candidate)
         return replace(candidate, id=candidate_id)
@@ -813,6 +898,14 @@ class Scanner:
                 candidate = self.scan_symbol_strategy(symbol, strategy)
                 if candidate is not None:
                     results.append(candidate)
+        results.sort(
+            key=lambda candidate: (
+                candidate.decision.allowed,
+                candidate.quality_score,
+                -candidate.contract.spread_pct,
+            ),
+            reverse=True,
+        )
         return results
 
     def scan_strategy(self, strategy: StrategyConfig) -> list[Candidate]:
@@ -826,4 +919,12 @@ class Scanner:
             candidate = self.scan_symbol_strategy(symbol, strategy)
             if candidate is not None:
                 results.append(candidate)
+        results.sort(
+            key=lambda candidate: (
+                candidate.decision.allowed,
+                candidate.quality_score,
+                -candidate.contract.spread_pct,
+            ),
+            reverse=True,
+        )
         return results

@@ -17,6 +17,20 @@ from killer_options_bot.brokers.base import OrderResult
 from killer_options_bot.models import Bar, OptionContract, Quote, Side
 
 
+def _completed_bar_end(moment: datetime, interval: str) -> datetime:
+    """End one second before the active interval began.
+
+    At 10:02 on 5-minute bars, a request ending at 09:59:59 cannot contain the
+    still-forming 10:00 bar. At an exact boundary, the bar beginning at that
+    boundary is also excluded until the interval has fully elapsed.
+    """
+    minutes = {"1min": 1, "5min": 5, "15min": 15}.get(interval, 1)
+    bucket = moment.minute - (moment.minute % minutes)
+    return moment.replace(
+        minute=bucket, second=0, microsecond=0
+    ) - timedelta(seconds=1)
+
+
 class TradierError(RuntimeError):
     pass
 
@@ -122,13 +136,16 @@ class TradierMarketData:
         if now < start:
             # Before today's open: nothing to fetch, decline gracefully.
             return []
+        completed_end = _completed_bar_end(now, interval)
+        if completed_end < start:
+            return []
         data = self._get(
             "/markets/timesales",
             {
                 "symbol": symbol,
                 "interval": interval,
                 "start": start.strftime("%Y-%m-%d %H:%M"),
-                "end": now.strftime("%Y-%m-%d %H:%M"),
+                "end": completed_end.strftime("%Y-%m-%d %H:%M"),
                 "session_filter": "open",
             },
         )
@@ -163,13 +180,16 @@ class TradierMarketData:
         prev = today_open - timedelta(days=1)
         while not is_trading_day(prev.date()):
             prev -= timedelta(days=1)
+        completed_end = _completed_bar_end(now, interval)
+        if completed_end < today_open:
+            return []
         data = self._get(
             "/markets/timesales",
             {
                 "symbol": symbol,
                 "interval": interval,
                 "start": prev.strftime("%Y-%m-%d %H:%M"),
-                "end": now.strftime("%Y-%m-%d %H:%M"),
+                "end": completed_end.strftime("%Y-%m-%d %H:%M"),
                 "session_filter": "open",
             },
         )

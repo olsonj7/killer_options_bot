@@ -207,6 +207,8 @@ class Candidate:
     #: invalidates the setup (None when the signal has no natural level).
     underlying_price: float | None = None
     stop_level: float | None = None
+    #: Ephemeral entry-quality score (0..1) used to rank candidates before open.
+    quality_score: float = 0.0
 
 
 class PositionStatus(str, Enum):

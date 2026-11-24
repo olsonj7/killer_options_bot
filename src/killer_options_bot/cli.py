@@ -23,6 +23,19 @@ def _parse_as_of(args: argparse.Namespace) -> date | None:
     return date.fromisoformat(value)
 
 
+def _rank_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Best execution/conviction first across all strategies due this tick."""
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.decision.allowed,
+            candidate.quality_score,
+            -candidate.contract.spread_pct,
+        ),
+        reverse=True,
+    )
+
+
 def current_account_value(base_account_value: float, storage) -> float:
     """Deposit basis + realized P/L to date -- what's actually tradeable now.
 
@@ -851,6 +864,7 @@ def run_loop(
             scanned = []
             skipped = []
             skipped_open_range = False
+            pending: list[Candidate] = []
             for strategy in strategies:
                 if now_mono < next_scan[strategy.name]:
                     continue
@@ -885,15 +899,19 @@ def run_loop(
                         if candidate.id is not None:
                             storage.mark_candidate_blocked(candidate.id, block)
                         continue
-                    position = engine.open_from_candidate(candidate)
-                    if position is not None:
-                        opened += 1
-                        log(
-                            f"[{stamp}] opened #{position.id} "
-                            f"[{strategy.name}] {position.quantity}x "
-                            f"{position.option_symbol} @ "
-                            f"${position.entry_price:.2f}"
-                        )
+                    pending.append(candidate)
+
+            for candidate in _rank_candidates(pending):
+                position = engine.open_from_candidate(candidate)
+                if position is not None:
+                    opened += 1
+                    log(
+                        f"[{stamp}] opened #{position.id} "
+                        f"[{candidate.strategy}] {position.quantity}x "
+                        f"{position.option_symbol} @ "
+                        f"${position.entry_price:.2f} "
+                        f"(quality {candidate.quality_score:.2f})"
+                    )
             if scanned and opened == 0:
                 extra = f" (skipped {skipped})" if skipped else ""
                 if skipped_open_range:

@@ -171,6 +171,49 @@ def test_one_position_per_underlying(tmp_path):
     assert engine.storage.count_open_positions() == 1
 
 
+def test_spy_and_qqq_share_one_index_risk_bucket(tmp_path):
+    from dataclasses import replace
+
+    from killer_options_bot.config import RiskConfig
+
+    config = make_config(
+        tmp_path,
+        account_value=100000.0,
+        risk=RiskConfig(
+            max_trade_risk_pct=0.9,
+            max_open_positions=5,
+            max_trades_per_week=50,
+        ),
+    )
+    as_of = date(2026, 1, 1)
+    storage = Storage(config.db_path)
+    engine = PaperEngine(config, MockMarketData(as_of=as_of), storage, as_of=as_of)
+    base = make_candidate(as_of)
+    spy = replace(
+        base,
+        contract=replace(
+            base.contract,
+            symbol="SPY260115C00700000",
+            underlying="SPY",
+            strike=700.0,
+        ),
+    )
+    qqq = replace(
+        base,
+        contract=replace(
+            base.contract,
+            symbol="QQQ260115P00600000",
+            underlying="QQQ",
+            side=Side.PUT,
+            strike=600.0,
+        ),
+        side=Side.PUT,
+    )
+    assert engine.open_from_candidate(spy) is not None
+    assert engine.open_from_candidate(qqq) is None
+    assert storage.count_open_positions() == 1
+
+
 def test_other_strategy_may_not_hold_same_underlying(tmp_path):
     # Changed 2026-10-08: the per-underlying block is now GLOBAL across
     # strategies -- a weekly (default) AAPL hold DOES block a 0DTE-style

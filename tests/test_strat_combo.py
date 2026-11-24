@@ -58,6 +58,16 @@ def test_3_1_2_reversal_fires_put(tmp_path):
     assert "3-1-2 (3-1-2down)" in sig.note
 
 
+def test_outside_trigger_bar_declines(tmp_path):
+    bars = _two_one_two()
+    bars[-1] = _bar(
+        f"{TODAY}T10:15:00", 102.0, 99.8, close=101.6
+    )  # 3: breaks both inside-bar extremes
+    sig = strat_combo_signal(_quote(bars), make_config(tmp_path))
+    assert sig.side is None
+    assert "not a 2 bar" in sig.note
+
+
 def test_inside_bar_not_broken_waits(tmp_path):
     bars = _two_one_two()
     bars[-1] = _bar(f"{TODAY}T10:15:00", 101.1, 100.5, close=100.8)

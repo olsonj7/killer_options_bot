@@ -9,6 +9,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from killer_options_bot.models import Side
+
 
 @dataclass(frozen=True)
 class ContractFilters:
@@ -104,6 +106,9 @@ class SignalConfig:
     # Momentum signals: when True, RSI only vetoes blown-out readings (calls
     # above rsi_max, puts below 100 - rsi_max) instead of requiring a band.
     rsi_sanity_only: bool = False
+    # Require SPY and QQQ to agree with the trade's direction on the matching
+    # timeframe. A mixed or missing index read rejects the candidate.
+    require_index_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -249,6 +254,9 @@ class StrategyConfig:
     #: both hold for about a week -- a countertrend bet from one fighting the
     #: other's live position is a wash, not a hedge). None disables the check.
     conflict_group: str | None = None
+    #: Directions this strategy may enter. Recovery profiles can temporarily
+    #: disable calls or puts without changing the underlying signal code.
+    allowed_sides: tuple[Side, ...] = (Side.CALL, Side.PUT)
 
 
 @dataclass(frozen=True)
@@ -413,6 +421,22 @@ def _build_filters(d: dict) -> ContractFilters:
     if cfg.min_delta > cfg.max_delta:
         raise ValueError("min_delta must be <= max_delta")
     return cfg
+
+
+def _build_sides(raw_sides) -> tuple[Side, ...]:
+    """Parse a strategy's allowed_sides list, defaulting to both directions."""
+    values = raw_sides if raw_sides is not None else ("call", "put")
+    if isinstance(values, str):
+        values = (values,)
+    try:
+        sides = tuple(dict.fromkeys(Side(str(value).lower()) for value in values))
+    except ValueError as exc:
+        raise ValueError(
+            "strategies.*.allowed_sides must contain only 'call'/'put'"
+        ) from exc
+    if not sides:
+        raise ValueError("strategies.*.allowed_sides must not be empty")
+    return sides
 
 
 def _build_trims(raw_trims) -> tuple[TrimRule, ...]:
@@ -649,6 +673,9 @@ def load_config(
         reversal_rsi_min=float(signal.get("reversal_rsi_min", 30.0)),
         reversal_rsi_max=float(signal.get("reversal_rsi_max", 70.0)),
         rsi_sanity_only=bool(signal.get("rsi_sanity_only", False)),
+        require_index_confirmation=bool(
+            signal.get("require_index_confirmation", False)
+        ),
     )
     if signal_cfg.intraday_interval not in {"1min", "5min", "15min"}:
         raise ValueError(
@@ -690,6 +717,7 @@ def load_config(
                 (default_prof.get("limits") or {}).get("max_trades_per_day", 0)
             ),
             conflict_group=default_prof.get("conflict_group"),
+            allowed_sides=_build_sides(default_prof.get("allowed_sides")),
         )
     }
     for name, prof in (raw.get("strategies", {}) or {}).items():
@@ -722,6 +750,7 @@ def load_config(
             max_trades_per_day=max_trades_per_day,
             skip_midday=skip_midday,
             conflict_group=prof.get("conflict_group"),
+            allowed_sides=_build_sides(prof.get("allowed_sides")),
         )
 
     if tier and tier.get("strategies") is not None:

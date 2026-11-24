@@ -33,7 +33,7 @@ from killer_options_bot.storage import Storage
 #: Classic Fibonacci extension multiples, nearest-first, mapped onto a
 #: strategy's trim rungs in order when ``exits.fib_trim_enabled`` is set.
 _FIB_MULTIPLES = (1.272, 1.618, 2.0, 2.618)
-
+_INDEX_RISK_BUCKET = frozenset({"SPY", "QQQ"})
 
 
 @dataclass
@@ -174,6 +174,22 @@ class PaperEngine:
                 "(another strategy)",
             )
             return None
+        if candidate.contract.underlying in _INDEX_RISK_BUCKET:
+            bucket_open = next(
+                (
+                    p.underlying
+                    for p in self.storage.open_positions()
+                    if p.underlying in _INDEX_RISK_BUCKET
+                ),
+                None,
+            )
+            if bucket_open is not None:
+                self._note_blocked(
+                    candidate,
+                    f"blocked: index risk bucket already holds {bucket_open} "
+                    "(SPY/QQQ are one position)",
+                )
+                return None
 
         c = candidate.contract
         entry_price = self._entry_price(c)

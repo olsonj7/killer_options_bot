@@ -242,7 +242,7 @@ def test_position_remembers_strategy_and_uses_its_exits(tmp_path):
     # Distinct underlyings so the one-position-per-underlying rule doesn't block
     # the second open; this test is about per-strategy exits, not stacking.
     fast = engine.open_from_candidate(_make_candidate("fast", underlying="SPY"))
-    slow = engine.open_from_candidate(_make_candidate("slow", underlying="QQQ"))
+    slow = engine.open_from_candidate(_make_candidate("slow", underlying="AAPL"))
     assert fast.strategy == "fast"
     assert slow.strategy == "slow"
 
