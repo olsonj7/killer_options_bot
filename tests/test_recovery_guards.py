@@ -219,7 +219,19 @@ def test_recovery_yaml_is_put_only_and_ratchet_off():
     by_name = {strategy.name: strategy for strategy in config.active_strategies}
     assert by_name["default"].allowed_sides == (Side.PUT,)
     assert by_name["zerodte"].allowed_sides == (Side.PUT,)
+    assert (by_name["default"].filters.min_dte, by_name["default"].filters.max_dte) == (7, 14)
+    assert (by_name["zerodte"].filters.min_dte, by_name["zerodte"].filters.max_dte) == (0, 1)
+    assert (by_name["strat"].filters.min_dte, by_name["strat"].filters.max_dte) == (1, 2)
+    assert (by_name["swing"].filters.min_dte, by_name["swing"].filters.max_dte) == (7, 21)
     assert all(not strategy.exits.ratchet for strategy in by_name.values())
+
+    import yaml
+
+    raw = yaml.safe_load(open("config.yaml", encoding="utf-8"))
+    assert raw["contract_filters"]["min_dte"] == 7
+    assert raw["contract_filters"]["max_dte"] == 14
+    assert raw["contract_filters"]["min_delta"] == 0.20
+    assert raw["contract_filters"]["max_delta"] == 0.40
 
 
 def test_disallowed_sides_are_validated():
